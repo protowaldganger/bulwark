@@ -1,0 +1,4 @@
+(function() {
+  'use strict';
+  window.COMSCORE = { purge: function() { window._comscore = []; }, beacon: function() {} };
+})();

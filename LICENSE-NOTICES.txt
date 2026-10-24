@@ -1,0 +1,8 @@
+Bulwark
+Copyright (C) 2026 protowaldganger
+Licensed under the GNU General Public License v3.0 or later (see LICENSE).
+
+Bulwark bundles compiled data from these filter lists:
+EasyList, EasyPrivacy (easylist.to): GPLv3 / CC BY-SA 3.0
+uBlock Origin uAssets (github.com/uBlockOrigin/uAssets): GPLv3
+Brave adblock-lists (github.com/brave/adblock-lists): MPL 2.0

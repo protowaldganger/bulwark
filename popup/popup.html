@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bulwark</title>
+  <link rel="stylesheet" href="../ui/theme.css">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><img src="../icons/icon-32.png" alt="" width="18" height="18"><b>Bulwark</b></div>
+    <span class="pill" id="privacy" title="Strict privacy: Bulwark makes no network requests on its own">Strict privacy</span>
+    <label class="switch" title="Protection everywhere"><input type="checkbox" id="global" aria-label="Protection everywhere"><span></span></label>
+  </header>
+
+  <main id="main" hidden>
+    <section class="site">
+      <div>
+        <div class="host" id="host"></div>
+        <div class="state" id="state"></div>
+      </div>
+      <label class="switch big" title="Blocking on this site"><input type="checkbox" id="site" aria-label="Blocking on this site"><span></span></label>
+    </section>
+
+    <section class="panel" id="tiles">
+      <div class="stat"><b id="n-blocked">0</b><span>Requests blocked</span></div>
+      <div class="stat"><b id="n-hidden">0</b><span>Elements hidden</span></div>
+      <div class="stat"><b id="n-cookies">0</b><span>Cookies blocked</span></div>
+      <div class="stat" id="tile-yt" hidden><b id="n-yt">0</b><span>YouTube ads removed</span></div>
+    </section>
+
+    <section class="cookies">
+      <div class="label">Cookies on this site</div>
+      <div class="seg" id="cookies" role="group" aria-label="Cookie policy">
+        <button type="button" data-p="block" aria-pressed="false">Block all</button>
+        <button type="button" data-p="necessary" aria-pressed="false">Necessary</button>
+        <button type="button" data-p="allow" aria-pressed="false">Allow all</button>
+      </div>
+      <p class="hint" id="cookie-hint"></p>
+    </section>
+  </main>
+
+  <main id="inactive" class="inactive" hidden>
+    <p><b>Nothing to block here.</b></p>
+    <p class="muted">Bulwark works on regular web pages. Browser pages and the extension store are off limits to every extension.</p>
+  </main>
+
+  <a class="lists" id="lists" href="#" title="Manage filter lists"><span id="lists-text">Filter lists</span><span aria-hidden="true">›</span></a>
+
+  <footer class="bottom">
+    <button class="btn" id="pick" type="button">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3l4.2 10 1.5-4.3L13 7.2z"/></svg>Block element
+    </button>
+    <button class="btn ink" id="options" type="button">Dashboard</button>
+  </footer>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

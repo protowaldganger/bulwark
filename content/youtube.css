@@ -1,0 +1,47 @@
+/* Bulwark: YouTube ad surfaces. Injected as a static stylesheet at
+   document_start so nothing flashes before it applies. */
+
+/* Home, search and sidebar ads */
+#masthead-ad,
+ytd-ad-slot-renderer,
+ytd-in-feed-ad-layout-renderer,
+ytd-display-ad-renderer,
+ytd-promoted-sparkles-web-renderer,
+ytd-promoted-sparkles-text-search-renderer,
+ytd-promoted-video-renderer,
+ytd-compact-promoted-video-renderer,
+ytd-search-pyv-renderer,
+ytd-carousel-ad-renderer,
+ytd-video-masthead-ad-v3-renderer,
+ytd-video-masthead-ad-advertiser-info-renderer,
+ytd-banner-promo-renderer,
+ytd-statement-banner-renderer,
+ytd-rich-item-renderer:has(> #content > ytd-ad-slot-renderer),
+ytd-rich-section-renderer:has(> #content > ytd-statement-banner-renderer),
+ytd-reel-video-renderer:has(ytd-ad-slot-renderer),
+
+/* Watch page companions */
+#player-ads,
+ytd-player-legacy-desktop-watch-ads-renderer,
+ytd-companion-slot-renderer,
+ytd-action-companion-ad-renderer,
+ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"],
+
+/* In-player overlay ads (not the skip button, which the skipper uses) */
+.ytp-ad-overlay-container,
+.ytp-ad-overlay-slot,
+.ytp-ad-image-overlay,
+.ytp-ad-text-overlay,
+
+/* Anti-adblock enforcement dialog */
+ytd-enforcement-message-view-model,
+tp-yt-paper-dialog:has(> ytd-enforcement-message-view-model),
+
+/* m.youtube.com */
+ytm-promoted-sparkles-web-renderer,
+ytm-companion-ad-renderer,
+ytm-promoted-video-renderer,
+ad-slot-renderer,
+ytm-rich-item-renderer:has(> ad-slot-renderer) {
+  display: none !important;
+}

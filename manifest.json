@@ -1,0 +1,123 @@
+{
+  "manifest_version": 3,
+  "name": "Bulwark Ad Blocker",
+  "short_name": "Bulwark",
+  "version": "1.1.0",
+  "description": "Private, fast ad and tracker blocking with first-class YouTube ad removal and per-site cookie control. Sends nothing about you anywhere.",
+  "minimum_chrome_version": "121",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Bulwark",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "background": {
+    "service_worker": "background/sw.js",
+    "type": "module"
+  },
+  "permissions": [
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
+    "scripting",
+    "storage",
+    "tabs",
+    "webNavigation",
+    "webRequest",
+    "cookies",
+    "contextMenus",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content/cosmetic.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "bulwark-youtube",
+        "enabled": true,
+        "path": "rulesets/bulwark-youtube.json"
+      },
+      {
+        "id": "easylist",
+        "enabled": true,
+        "path": "rulesets/easylist.json"
+      },
+      {
+        "id": "easyprivacy",
+        "enabled": true,
+        "path": "rulesets/easyprivacy.json"
+      },
+      {
+        "id": "ubo-filters",
+        "enabled": true,
+        "path": "rulesets/ubo-filters.json"
+      },
+      {
+        "id": "ubo-quick-fixes",
+        "enabled": true,
+        "path": "rulesets/ubo-quick-fixes.json"
+      },
+      {
+        "id": "ubo-unbreak",
+        "enabled": true,
+        "path": "rulesets/ubo-unbreak.json"
+      },
+      {
+        "id": "ubo-privacy",
+        "enabled": true,
+        "path": "rulesets/ubo-privacy.json"
+      },
+      {
+        "id": "brave-unbreak",
+        "enabled": true,
+        "path": "rulesets/brave-unbreak.json"
+      },
+      {
+        "id": "brave-specific",
+        "enabled": true,
+        "path": "rulesets/brave-specific.json"
+      }
+    ]
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "resources/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ],
+      "use_dynamic_url": true
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'self' https:"
+  }
+}
