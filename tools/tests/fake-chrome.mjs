@@ -19,7 +19,20 @@ function event() {
 const PATTERN = /^(\*|https?|wss?|file|ftp):\/\/(\*|\*\.[^/*]+|[^/*]+)\/.*$/;
 function validPattern(p) { return p === '<all_urls>' || PATTERN.test(p); }
 
-export function createChrome(root, { fetchFixtures = {} } = {}) {
+// Safari mode mirrors Safari's declarativeNetRequest support (MDN
+// browser-compat-data): no per-rule debug events, no static rule toggles,
+// no match testing, and rules using unsupported features are rejected.
+const SAFARI_TYPES = new Set(['main_frame', 'sub_frame', 'stylesheet', 'script', 'image', 'font', 'xmlhttprequest', 'ping', 'media', 'websocket', 'other']);
+export function safariRuleError(r) {
+  const c = r.condition;
+  for (const k of ['initiatorDomains', 'excludedInitiatorDomains', 'requestMethods', 'excludedRequestMethods', 'tabIds', 'responseHeaders']) if (c[k]) return 'unsupported condition ' + k;
+  for (const t of [...(c.resourceTypes || []), ...(c.excludedResourceTypes || [])]) if (!SAFARI_TYPES.has(t)) return 'unsupported type ' + t;
+  if (c.regexFilter && (/[|{}]/.test(c.regexFilter) || /\\[dDwWsSbB]/.test(c.regexFilter))) return 'unsupported regex';
+  if (r.action.responseHeaders) return 'unsupported responseHeaders';
+  return null;
+}
+
+export function createChrome(root, { fetchFixtures = {}, safari = false } = {}) {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
   const BASE = 'chrome-extension://bulwarktest/';
   const log = { insertCSS: [], executeScript: [], removedCookies: [], reloads: [], icons: [], sentToTabs: [] };
@@ -51,6 +64,7 @@ export function createChrome(root, { fetchFixtures = {} } = {}) {
   const enabled = new Set();
   for (const r of manifest.declarative_net_request.rule_resources) {
     staticSets.set(r.id, JSON.parse(fs.readFileSync(path.join(root, r.path), 'utf8')));
+    if (safari) for (const rule of staticSets.get(r.id)) { const e = safariRuleError(rule); if (e) throw new Error(`Safari would reject ${r.id}#${rule.id}: ${e}`); }
     if (r.enabled) enabled.add(r.id);
   }
   const disabledStatic = new Map();
@@ -78,7 +92,7 @@ export function createChrome(root, { fetchFixtures = {} } = {}) {
       const next = dynamic.filter(r => !rm.has(r.id));
       const ids = new Set(next.map(r => r.id));
       for (const r of addRules) {
-        const err = validateRule(r);
+        const err = validateRule(r) || (safari && safariRuleError(r));
         if (err) throw new Error(`Rule with id ${r.id}: ${err}`);
         if (ids.has(r.id)) throw new Error(`Rule with id ${r.id} does not have a unique ID.`);
         ids.add(r.id);
@@ -210,5 +224,14 @@ export function createChrome(root, { fetchFixtures = {} } = {}) {
     throw new TypeError('fetch blocked in test: ' + url);
   };
 
+  if (safari) {
+    for (const k of ['onRuleMatchedDebug', 'updateStaticRules', 'getDisabledRuleIds', 'testMatchOutcome', 'getAvailableStaticRuleCount', 'MAX_NUMBER_OF_DYNAMIC_RULES', 'MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES', 'MAX_NUMBER_OF_REGEX_RULES']) delete DNR[k];
+    DNR.MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES = 30000;
+    DNR._matched = [];
+    DNR.getMatchedRules = async ({ tabId }) => ({ rulesMatchedInfo: DNR._matched.filter(m => m.tabId === tabId) });
+    const insert = scripting.insertCSS;
+    // Safari before 18 rejects the origin option.
+    scripting.insertCSS = async (o) => { if ('origin' in o) throw new Error('Invalid call to scripting.insertCSS(). Unknown property: origin'); return insert(o); };
+  }
   return { chrome, log, tabs, tabListeners, registered, fetchImpl, dynamicRules: () => dynamic, disabledStatic, enabled, BASE };
 }

@@ -41,8 +41,15 @@ const tables = new Map();
 export async function bundledScriptletTable(id) {
   if (tables.has(id)) return tables.get(id);
   let table = {};
+  // Only ask for files that were shipped: Safari logs a missing extension
+  // file as an error and may never settle the request.
+  const info = (await getMeta()).lists[id];
+  if (!info || !(info.scriptletHosts > 0)) { tables.set(id, table); return table; }
   try {
-    const res = await fetch(chrome.runtime.getURL(`generated/scriptlets/${id}.js`));
+    const res = await Promise.race([
+      fetch(chrome.runtime.getURL(`generated/scriptlets/${id}.js`)),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000))
+    ]);
     if (res.ok) {
       const text = await res.text();
       const nl = text.indexOf('\n');
@@ -57,6 +64,12 @@ async function scriptletHosts(id) {
   return Object.keys(await bundledScriptletTable(id)).filter(h => !h.endsWith('.*'));
 }
 
+// youtube-flag.js runs first and tells youtube-main.js that ad-free
+// requests are on.
+function ytMainFiles(s) {
+  return s.youtube.adFree ? ['content/youtube-flag.js', 'content/youtube-main.js'] : ['content/youtube-main.js'];
+}
+
 function whitelistPatterns(s) {
   return matchPatternsFor(s.whitelist.filter(isValidHostname)).flatMap(p => [p, p.replace('*://*.', '*://')]);
 }
@@ -69,7 +82,7 @@ async function desiredScripts() {
   const withExclude = (o) => (exclude.length ? { ...o, excludeMatches: exclude } : o);
 
   if (s.enabled) {
-    if (s.youtube.prune) out.push(withExclude({ id: 'bw-yt-main', matches: YT_MATCHES, js: ['content/youtube-main.js'], world: 'MAIN', ...common }));
+    if (s.youtube.prune) out.push(withExclude({ id: 'bw-yt-main', matches: YT_MATCHES, js: ytMainFiles(s), world: 'MAIN', ...common }));
     out.push(withExclude({ id: 'bw-yt-iso', matches: YT_MATCHES, js: ['content/youtube-iso.js'], css: ['content/youtube.css'], ...common }));
     for (const l of LISTS) {
       if (!l.bundled || !s.lists[l.id]) continue;
@@ -193,7 +206,7 @@ export async function onCommitted(details) {
 
   if (fallback) {
     const files = [];
-    if (s.youtube.prune && /(^|\.)(youtube\.com|youtube-nocookie\.com|youtubekids\.com)$/.test(host)) files.push('content/youtube-main.js');
+    if (s.youtube.prune && /(^|\.)(youtube\.com|youtube-nocookie\.com|youtubekids\.com)$/.test(host)) files.push(...ytMainFiles(s));
     for (const l of LISTS) {
       if (!l.bundled || !s.lists[l.id]) continue;
       const hosts = await scriptletHosts(l.id);

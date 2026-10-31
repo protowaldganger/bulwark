@@ -848,6 +848,45 @@ export function compileList(text, opts = {}) {
   }
 }
 
+// ---------------------------------------------------- Safari adaptation
+
+// Safari implements most of declarativeNetRequest, with gaps (MDN
+// browser-compat-data): initiatorDomains / excludedInitiatorDomains and
+// request methods only from Safari 26 (the older domains / excludedDomains
+// names work everywhere), no object / webtransport / webbundle /
+// csp_report resource types, no response header modification, and regex
+// filters limited to WebKit's content-blocker subset (no |, {}, or \d \w
+// \s \b classes). Returns an equivalent rule, or null when the rule cannot
+// be expressed faithfully and is safer left out.
+const SAFARI_TYPES = new Set(['main_frame', 'sub_frame', 'stylesheet', 'script', 'image', 'font', 'xmlhttprequest', 'ping', 'media', 'websocket', 'other']);
+
+export function webkitRegexOk(src) {
+  return !/[|{}]/.test(src) && !/\\[dDwWsSbB]/.test(src) && /^[\x20-\x7e]*$/.test(src);
+}
+
+export function adaptRuleForSafari(rule) {
+  const c = { ...rule.condition };
+  if (c.requestMethods || c.excludedRequestMethods) return null;
+  if (c.initiatorDomains) { c.domains = c.initiatorDomains; delete c.initiatorDomains; }
+  if (c.excludedInitiatorDomains) { c.excludedDomains = c.excludedInitiatorDomains; delete c.excludedInitiatorDomains; }
+  if (c.resourceTypes) {
+    c.resourceTypes = c.resourceTypes.filter(t => SAFARI_TYPES.has(t));
+    if (!c.resourceTypes.length) return null;
+  }
+  if (c.excludedResourceTypes) {
+    c.excludedResourceTypes = c.excludedResourceTypes.filter(t => SAFARI_TYPES.has(t));
+    if (!c.excludedResourceTypes.length) delete c.excludedResourceTypes;
+  }
+  if (c.regexFilter && !webkitRegexOk(c.regexFilter)) return null;
+  let action = rule.action;
+  if (action.type === 'modifyHeaders') {
+    action = { ...action };
+    delete action.responseHeaders;
+    if (!action.requestHeaders || !action.requestHeaders.length) return null;
+  }
+  return { ...rule, action, condition: c };
+}
+
 // ------------------------------------------------------- rule packing
 
 const PLAIN_HOST_FILTER = /^\|\|([a-z0-9_]([a-z0-9_.-]*[a-z0-9_])?)\^$/;

@@ -8,7 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { validateRule } from '../../engine/compiler.js';
 import { evaluate } from './dnr-matcher.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+// BW_DIST=1 checks dist/, BW_DIST=safari checks dist-safari/.
+const ROOT = process.env.BW_DIST === 'safari' ? path.join(REPO, 'dist-safari') : process.env.BW_DIST ? path.join(REPO, 'dist') : REPO;
 const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
 const resources = manifest.declarative_net_request.rule_resources;
 const rulesets = resources.filter(r => r.enabled).map(r => ({ id: r.id, rules: JSON.parse(fs.readFileSync(path.join(ROOT, r.path), 'utf8')) }));
@@ -117,7 +119,7 @@ test('rule matching stays fast enough for a sanity check', () => {
 
 test('merged host rules still block every host they were built from', async () => {
   const { preprocess } = await import('../../engine/compiler.js');
-  const lines = preprocess(fs.readFileSync(path.join(ROOT, 'tools/.cache/easyprivacy.txt'), 'utf8'))
+  const lines = preprocess(fs.readFileSync(path.join(REPO, 'tools/.cache/easyprivacy.txt'), 'utf8'))
     .filter(l => /^\|\|[a-z0-9.-]+\^$/.test(l));
   const sample = lines.filter((_, i) => i % Math.ceil(lines.length / 400) === 0);
   const ep = rulesets.filter(r => r.id === 'easyprivacy' || r.id === 'ubo-unbreak' || r.id === 'brave-unbreak' || r.id === 'ubo-privacy');

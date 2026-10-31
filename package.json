@@ -1,6 +1,6 @@
 {
   "name": "bulwark-adblock",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "Bulwark: Manifest V3 ad blocker with first-class YouTube ad removal and cookie control.",
@@ -9,7 +9,8 @@
   "scripts": {
     "build": "node tools/build.mjs",
     "build:offline": "node tools/build.mjs --offline",
-    "test": "node --test tools/tests/*.test.mjs"
+    "test": "node --test tools/tests/*.test.mjs",
+    "test:safari": "BW_DIST=safari node --test tools/tests/rulesets.test.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.24.2",

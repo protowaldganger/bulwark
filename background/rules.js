@@ -2,9 +2,9 @@
 // (whitelist, pause, cookies), user rules and list update deltas.
 
 import { LISTS, YT_RULESET } from '../engine/lists.js';
-import { PRIORITY, compileCustom, validateRule } from '../engine/compiler.js';
+import { PRIORITY, compileCustom, validateRule, adaptRuleForSafari } from '../engine/compiler.js';
 import { TRACKER_COOKIE_DOMAINS, ENTITY_GROUPS } from '../engine/cookies.js';
-import { getSettings, getCustomFilters, report, isValidHostname } from './state.js';
+import { getSettings, getCustomFilters, report, isValidHostname, isWhitelisted, IS_SAFARI } from './state.js';
 import * as idb from './idb.js';
 import { ID, dynamicState } from './ids.js';
 
@@ -37,6 +37,7 @@ async function dynamicRules() {
 // the whole call), the batch is split until the bad rule is isolated.
 export async function safeUpdateDynamic(removeRuleIds, addRules) {
   dynamicState.version++;
+  if (IS_SAFARI) addRules = addRules.map(adaptRuleForSafari).filter(Boolean);
   if (removeRuleIds.length) {
     try { await DNR.updateDynamicRules({ removeRuleIds }); }
     catch (e) { report('dnr-remove', e); }
@@ -109,6 +110,23 @@ export function buildSystemRules(s) {
       id: ID.pause, priority: PRIORITY.whitelist,
       action: { type: 'allowAllRequests' },
       condition: { resourceTypes: ['main_frame', 'sub_frame'] }
+    });
+  }
+
+  // YouTube page loads ask for the ad-free variant of the video (pp=eAE=,
+  // see content/youtube-main.js). A pp parameter that a link already
+  // carries (search and recommendation tracking) is replaced; the allow
+  // rule stops the redirect once the URL has ours.
+  if (s.enabled && s.youtube.prune && s.youtube.adFree && !isWhitelisted('www.youtube.com', s)) {
+    rules.push({
+      id: ID.ytAdFreeAllow, priority: PRIORITY.whitelist - 1,
+      action: { type: 'allow' },
+      condition: { regexFilter: '^https://(www\\.)?youtube\\.com/watch\\?([^#]*&)?pp=eAE[%=]', resourceTypes: ['main_frame'] }
+    });
+    rules.push({
+      id: ID.ytAdFree, priority: PRIORITY.whitelist - 2,
+      action: { type: 'redirect', redirect: { transform: { queryTransform: { addOrReplaceParams: [{ key: 'pp', value: 'eAE=' }] } } } },
+      condition: { regexFilter: '^https://(www\\.)?youtube\\.com/watch\\?', resourceTypes: ['main_frame'] }
     });
   }
 

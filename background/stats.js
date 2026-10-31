@@ -169,6 +169,25 @@ export async function countYouTube(tabId, m) {
   schedule();
 }
 
+// Safari has no per-request rule events, but can list the rules matched in
+// a tab on demand (declarativeNetRequestFeedback). Used when the popup opens.
+export async function matchedCount(tabId) {
+  const DNR = chrome.declarativeNetRequest;
+  if (!DNR.getMatchedRules) return null;
+  try {
+    const res = await DNR.getMatchedRules({ tabId });
+    const quiet = await loadQuietIds();
+    let n = 0;
+    for (const m of (res && res.rulesMatchedInfo) || []) {
+      const r = m.rule || {};
+      if (r.rulesetId === '_dynamic' || r.rulesetId === '_session') { if (r.ruleId >= ID.customBase) n++; continue; }
+      const q = quiet.get(r.rulesetId);
+      if (!(q && r.ruleId <= q)) n++;
+    }
+    return n;
+  } catch { return null; }
+}
+
 export async function tabStats(tabId, host) {
   await load();
   const t = tabs.get(tabId) || { blocked: 0, cookies: 0, yt: 0 };

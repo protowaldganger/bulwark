@@ -6,7 +6,7 @@ import { LISTS } from '../engine/lists.js';
 import {
   VERSION, DEFAULT_SETTINGS, getSettings, saveSettings, deepMerge, getCustomFilters,
   hostOf, rawHostOf, hostChain, isWhitelisted, cookiePolicyFor, isValidHostname, report, diagnostics, serial,
-  effective, netPolicy
+  effective, netPolicy, IS_SAFARI
 } from './state.js';
 import { netFetch, SB_HOST } from './net.js';
 import { syncStaticRulesets, syncSystemRules, syncCustomRules, syncListDeltas, ruleStats, testUrl } from './rules.js';
@@ -266,7 +266,7 @@ async function applySettings(patch) {
   const changed = (k) => JSON.stringify(before[k]) !== JSON.stringify(next[k]);
   await serial(async () => {
     if (changed('lists') || changed('customLists') || changed('youtube')) await step('rulesets', syncStaticRulesets);
-    if (changed('whitelist') || changed('cookies') || changed('enabled')) await step('system-rules', syncSystemRules);
+    if (changed('whitelist') || changed('cookies') || changed('enabled') || changed('youtube')) await step('system-rules', syncSystemRules);
     if (changed('lists') || changed('customLists')) { await step('list-deltas', syncListDeltas); await step('overlay', rebuildOverlay); }
     if (changed('whitelist') || changed('cookies') || changed('youtube') || changed('lists') || changed('enabled')) await step('scripts', syncRegistrations);
     if (changed('ui')) await step('badge', applyBadge);
@@ -346,6 +346,10 @@ async function popupState(tabId) {
   const host = hostOf(url);
   const web = /^https?:/.test(url);
   const st = await stats.tabStats(tabId, rawHostOf(url));
+  if (IS_SAFARI && !DNR.onRuleMatchedDebug) {
+    const n = await stats.matchedCount(tabId);
+    if (n !== null) st.blocked = Math.max(st.blocked, n);
+  }
   let hidden = 0;
   if (web) {
     try {

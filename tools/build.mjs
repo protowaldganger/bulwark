@@ -17,13 +17,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 import { LISTS, YT_RULESET } from '../engine/lists.js';
-import { compileList, validateRule, fnv1a, badfilterKey, preprocess, packCosmetic, finalizeRules } from '../engine/compiler.js';
+import { compileList, validateRule, fnv1a, badfilterKey, preprocess, packCosmetic, finalizeRules, adaptRuleForSafari } from '../engine/compiler.js';
 import { buildScriptletFile, bulwarkScriptlets } from '../engine/scriptlets.js';
 import { TRACKER_COOKIE_SOURCE, ENTITY_GROUPS } from '../engine/cookies.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CACHE = path.join(ROOT, 'tools', '.cache');
-const DIST = path.join(ROOT, 'dist');
+const DIST_CHROME = path.join(ROOT, 'dist');
+const DIST_SAFARI = path.join(ROOT, 'dist-safari');
+let DIST = DIST_CHROME;
 const OFFLINE = process.argv.includes('--offline');
 const REGEX_LIMIT = 1000;
 
@@ -160,7 +162,7 @@ async function compileAll() {
 
 // ---------------------------------------------------------------- dist
 
-const MIN = { minify: true, legalComments: 'none', target: 'chrome121', charset: 'utf8' };
+let MIN = { minify: true, legalComments: 'none', target: 'chrome121', charset: 'utf8' };
 
 async function minifyJs(code, format = 'iife') {
   return (await esbuild.transform(code, { ...MIN, loader: 'js', format })).code;
@@ -175,7 +177,11 @@ async function copy(from, to) {
   await fs.copyFile(from, to);
 }
 
-async function buildDist({ scriptletTables, shims }) {
+async function buildDist({ scriptletTables, shims }, { safari = false } = {}) {
+  DIST = safari ? DIST_SAFARI : DIST_CHROME;
+  MIN = safari
+    ? { minify: true, legalComments: 'none', target: 'safari16.4', charset: 'utf8', define: { __BW_SAFARI__: 'true' } }
+    : { minify: true, legalComments: 'none', target: 'chrome121', charset: 'utf8', define: { __BW_SAFARI__: 'false' } };
   await fs.rm(DIST, { recursive: true, force: true });
   await fs.mkdir(DIST, { recursive: true });
 
@@ -194,7 +200,7 @@ async function buildDist({ scriptletTables, shims }) {
   }
 
   // Content scripts and styles.
-  for (const f of ['cosmetic.js', 'picker.js', 'youtube-iso.js', 'youtube-main.js']) {
+  for (const f of ['cosmetic.js', 'picker.js', 'youtube-iso.js', 'youtube-main.js', 'youtube-flag.js']) {
     await fs.mkdir(d('content'), { recursive: true });
     await fs.writeFile(d('content', f), await minifyJs(await fs.readFile(p('content', f), 'utf8')));
   }
@@ -210,7 +216,18 @@ async function buildDist({ scriptletTables, shims }) {
   for (const [mode, src] of Object.entries(shims)) await fs.writeFile(d('generated', `cookie-${mode}.js`), await minifyJs(src));
   await copy(p('generated/meta.json'), d('generated/meta.json'));
   for (const f of await fs.readdir(p('generated/cosmetic'))) await copy(p('generated/cosmetic', f), d('generated/cosmetic', f));
-  for (const f of await fs.readdir(p('rulesets'))) await copy(p('rulesets', f), d('rulesets', f));
+  let dropped = 0;
+  for (const f of await fs.readdir(p('rulesets'))) {
+    if (!safari) { await copy(p('rulesets', f), d('rulesets', f)); continue; }
+    // Safari: rewrite each rule into the subset Safari implements. Ids are
+    // kept, so list updates and statistics still line up.
+    const rules = JSON.parse(await fs.readFile(p('rulesets', f), 'utf8'));
+    const out = rules.map(adaptRuleForSafari).filter(Boolean);
+    dropped += rules.length - out.length;
+    await fs.mkdir(d('rulesets'), { recursive: true });
+    await fs.writeFile(d('rulesets', f), JSON.stringify(out));
+  }
+  if (safari) log(`safari: ${dropped} rules Safari cannot express were left out`);
 
   // Redirect surrogates.
   await fs.mkdir(d('resources'), { recursive: true });
@@ -223,6 +240,14 @@ async function buildDist({ scriptletTables, shims }) {
   const manifest = JSON.parse(await fs.readFile(p('manifest.json'), 'utf8'));
   for (const f of new Set([...Object.values(manifest.icons), ...Object.values(manifest.action.default_icon)])) await copy(p(f), d(f));
   manifest.background = { service_worker: 'background.js' };
+  if (safari) {
+    delete manifest.minimum_chrome_version;
+    // Safari ignores these (its extension URLs are always dynamic and the
+    // options page always opens in a tab); dropping them silences warnings.
+    for (const w of manifest.web_accessible_resources || []) delete w.use_dynamic_url;
+    if (manifest.options_ui) delete manifest.options_ui.open_in_tab;
+    manifest.browser_specific_settings = { safari: { strict_min_version: '16.4' } };
+  }
   await fs.writeFile(d('manifest.json'), JSON.stringify(manifest));
   await copy(p('LICENSE'), d('LICENSE'));
   await copy(p('LICENSE-NOTICES.txt'), d('LICENSE-NOTICES.txt'));
@@ -230,7 +255,7 @@ async function buildDist({ scriptletTables, shims }) {
   const files = await walk(DIST);
   let bytes = 0;
   for (const f of files) bytes += (await fs.stat(f)).size;
-  log(`dist: ${files.length} files, ${(bytes / 1024 / 1024).toFixed(2)} MB`);
+  log(`${path.basename(DIST)}: ${files.length} files, ${(bytes / 1024 / 1024).toFixed(2)} MB`);
 }
 
 async function walk(dir) {
@@ -242,4 +267,6 @@ async function walk(dir) {
   return out;
 }
 
-compileAll().then(buildDist).catch(e => { console.error(e); process.exit(1); });
+compileAll()
+  .then(async (data) => { await buildDist(data); await buildDist(data, { safari: true }); })
+  .catch(e => { console.error(e); process.exit(1); });

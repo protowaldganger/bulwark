@@ -281,6 +281,48 @@ test('YouTube settings drive registrations and the ping ruleset', async () => {
   assert.ok(reg.some(r => r.id === 'bw-yt-main'));
 });
 
+test('YouTube page loads are redirected to the ad-free variant, once', async () => {
+  const rules = env.dynamicRules();
+  const allow = rules.find(r => r.id === 3), redirect = rules.find(r => r.id === 4);
+  assert.ok(allow && redirect, 'ad-free rules installed by default');
+  assert.ok(allow.priority > redirect.priority);
+  const reg = (await chrome.scripting.getRegisteredContentScripts()).find(r => r.id === 'bw-yt-main');
+  assert.deepEqual(reg.js, ['content/youtube-flag.js', 'content/youtube-main.js']);
+  // Same semantics as Chrome's matcher for these simple patterns. Chrome
+  // may or may not escape the '=' in the value; both forms must stop the loop.
+  const kv = redirect.action.redirect.transform.queryTransform.addOrReplaceParams;
+  assert.deepEqual(kv, [{ key: 'pp', value: 'eAE=' }]);
+  const go = (url, escape = true) => {
+    if (new RegExp(allow.condition.regexFilter, 'i').test(url)) return url;
+    if (!new RegExp(redirect.condition.regexFilter, 'i').test(url)) return url;
+    const u = new URL(url);
+    const q = u.search.slice(1).split('&').filter(x => x && !x.startsWith('pp='));
+    q.push('pp=' + (escape ? 'eAE%3D' : 'eAE='));
+    u.search = '?' + q.join('&');
+    return u.href;
+  };
+  for (const escape of [true, false]) {
+    const v = escape ? 'eAE%3D' : 'eAE=';
+    const once = go('https://www.youtube.com/watch?v=dQw4w9WgXcQ', escape);
+    assert.equal(once, 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&pp=' + v);
+    assert.equal(go(once, escape), once, 'no redirect loop');
+    assert.equal(go('https://www.youtube.com/watch?v=x&pp=ygUFbXVzaWM%3D&t=4', escape), 'https://www.youtube.com/watch?v=x&t=4&pp=' + v, 'a tracking pp is replaced');
+    assert.equal(go('https://www.youtube.com/watch?v=x&app=desktop', escape), 'https://www.youtube.com/watch?v=x&app=desktop&pp=' + v, 'app= is not pp=');
+  }
+  assert.equal(go('https://www.youtube.com/shorts/abc'), 'https://www.youtube.com/shorts/abc');
+  assert.equal(go('https://www.youtube.com/embed/abc'), 'https://www.youtube.com/embed/abc');
+  assert.deepEqual(redirect.condition.resourceTypes, ['main_frame']);
+  // Off with the setting, on a whitelisted YouTube and while paused.
+  await msg({ t: 'save-settings', patch: { youtube: { adFree: false } } });
+  assert.ok(!env.dynamicRules().some(r => r.id === 3 || r.id === 4));
+  assert.deepEqual((await chrome.scripting.getRegisteredContentScripts()).find(r => r.id === 'bw-yt-main').js, ['content/youtube-main.js']);
+  await msg({ t: 'save-settings', patch: { youtube: { adFree: true } } });
+  await msg({ t: 'set-site-enabled', host: 'youtube.com', enabled: false }, popupSender);
+  assert.ok(!env.dynamicRules().some(r => r.id === 4));
+  await msg({ t: 'set-site-enabled', host: 'youtube.com', enabled: true }, popupSender);
+  assert.ok(env.dynamicRules().some(r => r.id === 4));
+});
+
 test('SponsorBlock: off under strict privacy, hash-prefix lookups when allowed', async () => {
   fetched.length = 0;
   let r = await msg({ t: 'sb-segments', id: 'dQw4w9WgXcQ', categories: ['sponsor'] }, contentSender(tabYt, tabYt.url));

@@ -4,6 +4,12 @@ import { LISTS } from '../engine/lists.js';
 
 export const VERSION = chrome.runtime.getManifest().version;
 
+// The Safari build defines __BW_SAFARI__; the user agent check covers the
+// unbundled source loaded in Safari.
+/* global __BW_SAFARI__ */
+export const IS_SAFARI = (typeof __BW_SAFARI__ !== 'undefined' && __BW_SAFARI__ === true) ||
+  (typeof navigator !== 'undefined' && /^((?!chrome|chromium|crios|edg|android).)*safari/i.test(navigator.userAgent || ''));
+
 export const DEFAULT_SETTINGS = {
   schema: 2,
   enabled: true,
@@ -15,6 +21,7 @@ export const DEFAULT_SETTINGS = {
   whitelist: [],                // hostnames where blocking is off
   youtube: {
     prune: true,                // MAIN-world ad payload pruning
+    adFree: true,               // ask YouTube for the ad-free variant (no start-up wait)
     skipper: true,              // fallback ad skipper
     blockPings: true,           // bundled YouTube network ruleset
     sponsorblock: false,

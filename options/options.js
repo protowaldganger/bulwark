@@ -199,11 +199,12 @@ const VIEWS = {
     const sbLocked = strict();
     return `
       <h1>YouTube</h1>
-      <p class="lede">Three layers, cheapest first. Ad schedules are removed from the player data before the player reads it, ad requests are blocked by the browser, and anything that still slips through is skipped the moment it appears.</p>
+      <p class="lede">Four layers, cheapest first. Videos are requested without ads, any ad data that still arrives is removed before the player reads it, ad requests are blocked by the browser, and anything that slips through is skipped the moment it appears.</p>
       <div class="section">
         <div class="head"><h2>Ads</h2></div>
         <div class="rows">
-          ${opt('prune', y.prune, 'Remove ads from player data', 'Strips pre-roll, mid-roll and anti-adblock payloads before playback. This is what keeps videos starting instantly.')}
+          ${opt('prune', y.prune, 'Remove ads from player data', 'Strips pre-roll, mid-roll and anti-adblock payloads before playback, so no ad is ever scheduled.')}
+          ${opt('adFree', y.adFree, 'Ask for ad-free playback', 'Requests the version of each video that YouTube serves without ads, so there is no ad to remove and no spinner before the video starts. If videos stop playing, turn this off.', !y.prune)}
           ${opt('blockPings', y.blockPings, 'Block ad requests', 'Native network rules for YouTube ad endpoints and ad trackers.')}
           ${opt('skipper', y.skipper, 'Fallback skipper', 'If an ad still starts, it is muted, sped up and skipped, then your volume and speed come back.')}
         </div>

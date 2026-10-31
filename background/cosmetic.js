@@ -156,11 +156,16 @@ function toCss(selectors) {
   return css;
 }
 
+// Older Safari versions reject the `origin` option; remember and drop it.
+let cssOrigin = true;
 async function insert(target, css) {
   if (!css) return true;
-  try { await chrome.scripting.insertCSS({ target, css, origin: 'USER' }); return true; }
-  catch (e) {
-    if (target.documentIds) return false; // document gone or not ready
+  try {
+    await chrome.scripting.insertCSS(cssOrigin ? { target, css, origin: 'USER' } : { target, css });
+    return true;
+  } catch (e) {
+    if (cssOrigin && /origin/i.test(String(e && e.message))) { cssOrigin = false; return insert(target, css); }
+    if (target.documentIds) return false; // document gone, not ready, or unsupported
     report('insertCSS', e);
     return false;
   }

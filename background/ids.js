@@ -2,6 +2,8 @@
 export const ID = {
   whitelist: 1,
   pause: 2,
+  ytAdFreeAllow: 3,         // watch URLs that already carry a pp parameter
+  ytAdFree: 4,              // add pp (ad-free variant) to watch URLs
   cookieTrackers: 10,
   cookieThirdParty: 11,
   cookieEntityBase: 20,     // 20..49

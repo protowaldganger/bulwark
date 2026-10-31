@@ -2,7 +2,7 @@
 
 By protowaldganger.
 
-A private, fast Manifest V3 ad and tracker blocker for Chrome-based browsers. It is built around one goal: YouTube with no ads and no wait. It compiles the filter lists Brave Shields ships by default into native browser rules, and adds a dedicated YouTube engine, per-site cookie control and a strict privacy mode.
+A private, fast Manifest V3 ad and tracker blocker for Chrome-based browsers and Safari. It is built around one goal: YouTube with no ads and no wait. It compiles the filter lists Brave Shields ships by default into native browser rules, and adds a dedicated YouTube engine, per-site cookie control and a strict privacy mode.
 
 Bulwark has no servers, no accounts and no telemetry. With strict privacy on (the default) it makes no network request at all unless you press **Check for updates**.
 
@@ -75,11 +75,13 @@ Supported syntax covers what real lists use: `||domain^`, wildcards, anchors, `/
 
 ### YouTube
 
-Three layers, cheapest first:
+Four layers, cheapest first:
 
-1. **Payload pruning.** YouTube's ad schedule (`adPlacements`, `adSlots`, `playerAds`, `adBreakHeartbeatParams`) is removed from the player data before the player reads it, through `JSON.parse`, `Response.json()` and the inline `ytInitialPlayerResponse` / `ytInitialData`. No ad is ever scheduled, so videos start as soon as content is buffered. The same pass removes the anti-adblock dialog payload, the ads panel and Shorts ads. Cost: about 10 to 20 µs per player response.
-2. **Network rules** for ad pings, `pagead`, `ad_break` and DoubleClick from YouTube pages. The `ad_status.js` detection bait gets a surrogate instead of being blocked.
-3. **Fallback skipper.** If an ad still starts, it is muted, played at 16x and skipped, and your volume and speed come back. Long (stitched) streams are never seeked. It wakes only when the player's state changes and pauses in background tabs.
+1. **Ad-free playback requests.** When YouTube schedules ads for a video and a blocker removes them, YouTube's streaming server still holds back the first seconds of video for about 80% of the ads' length, so the video sits on a spinner with no ad ("fake buffering"). Bulwark avoids this by asking for the variant of the video that YouTube serves without ads: player requests get field 15 of their `params` blob set (merged into any params already there), and page loads get the same through a `pp` parameter set by a network rule. That variant starts muted and hides the miniplayer button, so both are put back. If YouTube still sends ads or refuses the variant, Bulwark switches to the next method (`isInlinePlaybackNoAd`) and reloads the video once. Shorts, embeds, previews and live streams are left alone. Measured on YouTube in October 2026: about 13 s to first frame with pruning alone, under 1 s with ad-free requests.
+2. **Payload pruning.** YouTube's ad schedule (`adPlacements`, `adSlots`, `playerAds`, `adBreakHeartbeatParams`) is removed from the player data before the player reads it, through `JSON.parse`, `Response.json()` and the inline `ytInitialPlayerResponse` / `ytInitialData`. No ad is ever scheduled, so videos start as soon as content is buffered. The same pass removes the anti-adblock dialog payload, the ads panel and Shorts ads. Cost: about 10 to 20 µs per player response.
+   The page hooks also drop the player's "abnormality" listener (which swaps the video for the anti-adblock screen) and run a fixed 17 s penalty timer at once.
+3. **Network rules** for ad pings, `pagead`, `ad_break` and DoubleClick from YouTube pages. The `ad_status.js` detection bait gets a surrogate instead of being blocked.
+4. **Fallback skipper.** If an ad still starts, it is muted, played at 16x and skipped, and your volume and speed come back. Long (stitched) streams are never seeked. It wakes only when the player's state changes and pauses in background tabs.
 
 Optional: hide merch shelves, promotions, Shorts and end-screen cards; SponsorBlock auto-skip with an Undo notice (off under strict privacy).
 
@@ -113,7 +115,13 @@ Monochrome ink on white, Apple's system typeface (San Francisco on macOS), pill 
 
 Nothing was removed to get there. Merged host rules, a compact cosmetic format that stores each selector once, scriptlet data that ships once instead of twice, rule hashes recomputed on demand instead of shipped, minified code, and an "off" icon drawn at runtime do the work.
 
+Changes in 1.2: ad-free YouTube playback requests, which remove the start-up delay that YouTube adds when ads are blocked, and a Safari build.
+
 Speed changes in 1.1: CSS injection at navigation commit; cached per-site plans in the service worker; a one-file service worker that starts faster; content scripts that send only what changed; the YouTube helper reacting to events instead of polling heavy queries; and the toolbar icon updated only for tabs whose state differs.
+
+## Safari
+
+`npm run build` also writes a Safari version to `dist-safari/`: rules are rewritten into the subset Safari supports and features Safari lacks are detected at runtime. `safari/build-safari.command` turns it into an app with Xcode and installs it. See [safari/README.md](safari/README.md).
 
 ## Filter list updates
 
@@ -138,7 +146,7 @@ The tests boot the real service worker against in-memory Chrome APIs that apply 
 - Popup and pop-under blocking (`$popup`) has no MV3 equivalent.
 - `$csp`, `$replace`, `$urlskip`, HTML filtering and procedural filters nested in other pseudo-classes are skipped.
 - Server-side stitched YouTube ads cannot be removed from the stream; the skipper fast-forwards them.
-- Not tested in a live browser session; tests use simulated Chrome APIs and a simulated page.
+- The automated tests use simulated browser APIs and a simulated page. Real-world use so far: a Chromium-based browser and Safari 27 on macOS.
 
 ## License and credits
 

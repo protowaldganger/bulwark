@@ -3,3 +3,7 @@ dist/
 tools/.cache/
 *.zip
 .DS_Store
+dist-safari/
+safari/.build/
+safari/.last-build.log
+safari/Safari extension/

@@ -52,8 +52,10 @@ export function ruleMatches(rule, req) {
   const ih = req.initiator ? hostOf(req.initiator) : '';
   if (c.requestDomains && !domMatch(rh, c.requestDomains)) return false;
   if (c.excludedRequestDomains && domMatch(rh, c.excludedRequestDomains)) return false;
-  if (c.initiatorDomains && !(ih && domMatch(ih, c.initiatorDomains))) return false;
-  if (c.excludedInitiatorDomains && ih && domMatch(ih, c.excludedInitiatorDomains)) return false;
+  // `domains` / `excludedDomains` are the older names (used by the Safari build).
+  const inc = c.initiatorDomains || c.domains, exc = c.excludedInitiatorDomains || c.excludedDomains;
+  if (inc && !(ih && domMatch(ih, inc))) return false;
+  if (exc && ih && domMatch(ih, exc)) return false;
   if (c.domainType) {
     const third = ih ? site(ih) !== site(rh) : false;
     if (c.domainType === 'thirdParty' && !third) return false;

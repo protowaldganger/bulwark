@@ -9,8 +9,8 @@
 // (annoyances, user-added URLs) are applied entirely as dynamic rules.
 
 import { LISTS } from '../engine/lists.js';
-import { compileList, ruleKey, fnv1a } from '../engine/compiler.js';
-import { getSettings, report, serial, effective, netPolicy } from './state.js';
+import { compileList, ruleKey, fnv1a, adaptRuleForSafari } from '../engine/compiler.js';
+import { getSettings, report, serial, effective, netPolicy, IS_SAFARI } from './state.js';
 import { netFetch } from './net.js';
 import { syncListDeltas } from './rules.js';
 import { rebuildCosmeticIndex } from './cosmetic.js';
@@ -42,7 +42,10 @@ async function setListState(id, st) {
 async function bundledHashes(id) {
   try {
     const res = await fetch(chrome.runtime.getURL(`rulesets/${id}.json`));
-    return (await res.json()).map(ruleKey);
+    // Rule id N must map to index N-1; adapted rulesets can have gaps.
+    const out = [];
+    for (const r of await res.json()) out[r.id - 1] = ruleKey(r);
+    return out;
   } catch { return []; }
 }
 
@@ -81,8 +84,10 @@ export async function updateOne(def, force) {
   };
   if (def.bundled) {
     const old = await bundledHashes(def.id);
+    // The Safari build ships adapted rules, so compare like with like.
+    const freshRules = IS_SAFARI ? compiled.rules.map(adaptRuleForSafari).filter(Boolean) : compiled.rules;
     const fresh = new Map();
-    for (const r of compiled.rules) fresh.set(ruleKey(r), r);
+    for (const r of freshRules) fresh.set(ruleKey(r), r);
     const oldSet = new Set(old);
     record.disableIds = [];
     old.forEach((h, i) => { if (!fresh.has(h)) record.disableIds.push(i + 1); });

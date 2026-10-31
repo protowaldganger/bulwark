@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Bulwark Ad Blocker",
   "short_name": "Bulwark",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Private, fast ad and tracker blocking with first-class YouTube ad removal and per-site cookie control. Sends nothing about you anywhere.",
   "minimum_chrome_version": "121",
   "icons": {
