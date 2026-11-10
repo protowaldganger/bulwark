@@ -200,7 +200,7 @@ async function buildDist({ scriptletTables, shims }, { safari = false } = {}) {
   }
 
   // Content scripts and styles.
-  for (const f of ['cosmetic.js', 'picker.js', 'youtube-iso.js', 'youtube-main.js', 'youtube-flag.js']) {
+  for (const f of ['cosmetic.js', 'picker.js', 'youtube-iso.js', 'youtube-main.js', 'youtube-flag-0.js', 'youtube-flag-1.js', 'youtube-flag-2.js', 'youtube-flag-3.js', 'youtube-flag-4.js', 'youtube-flag-5.js']) {
     await fs.mkdir(d('content'), { recursive: true });
     await fs.writeFile(d('content', f), await minifyJs(await fs.readFile(p('content', f), 'utf8')));
   }

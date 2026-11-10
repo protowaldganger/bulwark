@@ -10,8 +10,10 @@
 //    serves without ads and therefore without the wait. Page loads get the
 //    same through a `pp` parameter that a network rule sets on watch URLs.
 //    That variant starts muted and hides the miniplayer button, so both are
-//    put back. If YouTube still sends ads, or refuses the variant, Bulwark
-//    falls back to the next method and reloads the video once.
+//    put back. YouTube changes which forms it accepts, so there are several
+//    methods. If a method gets ads anyway, or ends in an error screen while a
+//    normal request plays, it is retired: the video is loaded again and new
+//    pages start with the next method (the service worker remembers it).
 //
 // 2. Ad payload pruning (everywhere). adPlacements, adSlots and playerAds
 //    are removed from player responses before the player reads them, from
@@ -55,12 +57,17 @@
     pruned = 0; cost = 0; samples = 0;
   };
 
-  // Settings arrive the same way: content/youtube-flag.js, registered in
-  // front of this file, sets data-bwf="1" when ad-free requests are on.
-  let adFree = false;
+  // Settings arrive the same way: a content/youtube-flag-N.js file,
+  // registered in front of this one, sets data-bwf="N" when ad-free
+  // requests are on. N is the method to start with (background/ytadfree.js).
+  let adFree = false, method = 0;
   try {
     const f = root.getAttribute('data-bwf');
-    if (f !== null) { root.removeAttribute('data-bwf'); adFree = f === '1'; }
+    if (f !== null) {
+      root.removeAttribute('data-bwf');
+      const n = parseInt(f, 10);
+      if (n >= 0) { adFree = true; method = n; }
+    }
   } catch { /* ignore */ }
   const host = location.hostname;
   const startSearch = location.search; // YouTube tidies the URL later
@@ -68,10 +75,10 @@
 
   // ------------------------------------------------- ad-free playback
 
-  const NO_ADS = '\x78\x01'; // protobuf: field 15, varint 1
-  const URL_PARAM = 'eAE='; // the same, alone, as the network rule adds it
-
-  function withNoAds(p) {
+  // Appends protobuf fields to a request's params blob (base64, maybe
+  // URL-encoded and URL-safe). Later fields win, so this also overrides.
+  function withParams(pr, bytes) {
+    const p = pr.params;
     let raw = '', urlSafe = false;
     if (typeof p === 'string' && p) {
       let s = p;
@@ -79,33 +86,51 @@
       urlSafe = /[-_]/.test(s);
       s = s.replace(/-/g, '+').replace(/_/g, '/');
       while (s.length % 4) s += '=';
-      try { raw = atob_(s); } catch { return null; }
-      if (raw.slice(-2) === NO_ADS) return p;
-    } else if (p !== undefined && p !== null && p !== '') return null;
-    let out = btoa_(raw + NO_ADS);
+      try { raw = atob_(s); } catch { return false; }
+      if (raw.slice(-bytes.length) === bytes) return true;
+    } else if (p !== undefined && p !== null && p !== '') return false;
+    let out = btoa_(raw + bytes);
     if (urlSafe) out = out.replace(/\+/g, '-').replace(/\//g, '_');
-    return eURI(out);
+    pr.params = eURI(out);
+    return true;
+  }
+  function contentContext(pr) {
+    const pc = pr.playbackContext;
+    return pc.contentPlaybackContext && typeof pc.contentPlaybackContext === 'object' ? pc.contentPlaybackContext : (pc.contentPlaybackContext = {});
   }
 
-  // Methods, best first. Each returns false when it cannot apply.
+  // Ways of asking, best first. YouTube accepts different ones over time;
+  // when one fails, the next is used and the service worker remembers it
+  // for new pages. `noAds`: the answer should carry no ads at all (the
+  // others still get ads, which are pruned, but no start-up wait). `pp`:
+  // the form page loads use. Keep in step with background/ytadfree.js.
+  // The forms follow uBlock Origin's quick fixes.
   const METHODS = [
-    (pr) => {
-      const p = withNoAds(pr.params);
-      if (p === null) return false;
-      pr.params = p;
-      return true;
-    },
-    (pr) => {
-      const pc = pr.playbackContext;
-      const c = pc.contentPlaybackContext && typeof pc.contentPlaybackContext === 'object' ? pc.contentPlaybackContext : (pc.contentPlaybackContext = {});
-      c.isInlinePlaybackNoAd = true;
-      return true;
-    }
+    // Fields 12, 15 and 100: the channel-page autoplay variant.
+    { noAds: true, pp: 'YAF4AaIGAS4', apply: (pr) => withParams(pr, '\x60\x01\x78\x01\xa2\x06\x01\x2e') },
+    // Fields 15 and 12: the same variant, older form.
+    { noAds: true, pp: 'eAFgAQ', apply: (pr) => withParams(pr, '\x78\x01\x60\x01') },
+    // Inline playback.
+    { apply: (pr) => { const c = contentContext(pr); c.isInlinePlaybackNoAd = true; c.lactMilliseconds = String(Date.now()); return true; } },
+    // Field 94 and a fresh activity time.
+    { apply: (pr) => { if (!withParams(pr, '\xf0\x05\x01')) return false; contentContext(pr).lactMilliseconds = String(Date.now()); return true; } },
+    // A fixed params value.
+    { apply: (pr) => { pr.params = 'YAHI'; return true; } },
+    // The channel page's player.
+    { apply: (pr, o) => { const c = (o.context || pr.context).client; if (c.clientName !== 'WEB') return false; c.clientScreen = 'CHANNEL'; return true; } }
   ];
-  let method = 0;
+  if (method > METHODS.length) method = METHODS.length;
+  // Statuses that mean the video itself needs something (sign-in, age
+  // check, a live stream that has not started), not that we were refused.
+  const GENUINE = new Set(['LOGIN_REQUIRED', 'AGE_CHECK_REQUIRED', 'CONTENT_CHECK_REQUIRED', 'AGE_VERIFICATION_REQUIRED', 'LIVE_STREAM_OFFLINE']);
+
   const marked = new Map(); // videoId -> { m: method, t: time }
-  const reloaded = new Set();
-  let bypass = null; // { vid, until }: next request for vid goes out unchanged
+  const reloaded = new Set(); // videos reloaded ad-free after ads arrived
+  const reloads = new Map(); // videoId -> reloads after fake buffering
+  const plainTried = new Set(); // videos reloaded with a normal request
+  let bypass = null; // { vid, until }: requests for vid go out unchanged
+  let verify = null; // { vid, m }: a plain retry that decides about method m
+  let watchToken = 0;
 
   function wantsAdFree(o, pr) {
     const path = location.pathname;
@@ -128,35 +153,49 @@
     if (method >= METHODS.length || !wantsAdFree(o, pr)) return;
     try {
       for (let m = method; m < METHODS.length; m++) {
-        if (METHODS[m](pr)) { marked.set(vid, { m, t: Date.now() }); return; }
+        if (METHODS[m].apply(pr, o)) { marked.set(vid, { m, t: Date.now() }); return; }
       }
     } catch { /* never break the request */ }
   }
 
   const hasAds = (x) => AD_KEYS.slice(0, 3).some(k => Array.isArray(x[k]) ? x[k].length > 0 : x[k] !== undefined);
 
-  function fromAdFreeUrl() {
-    try { return new URLParams(startSearch).get('pp') === URL_PARAM; } catch { return false; }
+  // The method whose pp the network rule put on this page load, or -1.
+  const urlMethod = (() => {
+    try {
+      const pp = (new URLParams(startSearch).get('pp') || '').replace(/=+$/, '');
+      return pp ? METHODS.findIndex(x => x.pp === pp) : -1;
+    } catch { return -1; }
+  })();
+
+  // Method m failed: move on, and tell the service worker so new pages
+  // start at the next one.
+  function retire(m) {
+    if (method > m) return;
+    method = m + 1;
+    try { dispatch.call(document, new CE(channel, { detail: 'm' + method })); } catch { /* ignore */ }
   }
 
-  function retire(m) { if (method === m) method++; }
+  function player() {
+    const pl = document.getElementById('movie_player');
+    return pl && typeof pl.loadVideoById === 'function' ? pl : null;
+  }
 
-  // Loads the video again once the player has it, which sends a fresh
-  // player request (ad-free, or unchanged when `plain`).
-  function reload(vid, x, plain) {
-    if (reloaded.has(vid) || (!plain && method >= METHODS.length)) return;
-    reloaded.add(vid);
+  // Loads the video again, which sends a fresh player request: ad-free, or
+  // unchanged when `plain`. Waits for the player to have the video (or 2 s,
+  // in case it is stuck on an error screen without it).
+  function loadAgain(vid, x, plain) {
     const sc = x.playerConfig && x.playerConfig.playbackStartConfig;
     const start = (sc && +sc.startSeconds) || 0;
     const t0 = Date.now();
     const tick = () => {
-      const pl = document.getElementById('movie_player');
+      const pl = player();
       let d = null;
       try { d = pl && typeof pl.getVideoData === 'function' ? pl.getVideoData() : null; } catch { /* not ready */ }
-      if (d && d.video_id === vid && typeof pl.loadVideoById === 'function') {
+      if (pl && ((d && d.video_id === vid) || Date.now() - t0 > 2000)) {
         let at = start;
-        try { at = Math.max(start, +pl.getCurrentTime() || 0); } catch { /* ignore */ }
-        if (plain) bypass = { vid, until: Date.now() + 5000 };
+        try { if (d && d.video_id === vid) at = Math.max(start, +pl.getCurrentTime() || 0); } catch { /* ignore */ }
+        if (plain) bypass = { vid, until: Date.now() + 8000 };
         try { pl.loadVideoById({ videoId: vid, startSeconds: at }); } catch { /* ignore */ }
         return;
       }
@@ -165,32 +204,90 @@
     later(tick, 0);
   }
 
+  // An ad-free request for vid ended in an error. Retry it as a normal
+  // request; if that plays, the method was at fault and is retired.
+  function suspect(vid, m, x) {
+    if (plainTried.has(vid)) return;
+    plainTried.add(vid);
+    verify = { vid, m };
+    loadAgain(vid, x, true);
+  }
+
+  // Makes sure an ad-free video really starts: YouTube can accept the
+  // request and then show its error screen in the player, or hold the video
+  // back anyway (buffering with nothing buffered and no picture: the
+  // "fake buffering" this layer exists to avoid).
+  function watch(vid, m, x) {
+    const token = ++watchToken;
+    const t0 = Date.now();
+    let starved = 0;
+    const tick = () => {
+      if (token !== watchToken) return;
+      const pl = player();
+      let d = null;
+      try { d = pl && pl.getVideoData(); } catch { /* not ready */ }
+      if (pl && d && d.video_id === vid) {
+        const err = pl.querySelector('.ytp-error');
+        let status = 'OK';
+        try { const r = pl.getPlayerResponse && pl.getPlayerResponse(); status = (r && r.videoDetails && r.videoDetails.videoId === vid && r.playabilityStatus && r.playabilityStatus.status) || 'OK'; } catch { /* ignore */ }
+        if ((err && err.offsetWidth > 0) || (status !== 'OK' && !GENUINE.has(status))) { suspect(vid, m, x); return; }
+        try { if (+pl.getCurrentTime() > 0.5) return; } catch { /* ignore */ } // playing
+        let held = false;
+        try {
+          const st = pl.getPlayerStateObject && pl.getPlayerStateObject();
+          const nerd = st && st.isBuffering && pl.getStatsForNerds && pl.getStatsForNerds();
+          held = !!nerd && nerd.buffer_health_seconds === '0.00 s' && nerd.resolution === '0x0';
+        } catch { /* ignore */ }
+        starved = held ? starved + 250 : 0;
+        if (starved >= 4000) {
+          retire(m);
+          if ((reloads.get(vid) || 0) < 3 && method < METHODS.length) { reloads.set(vid, (reloads.get(vid) || 0) + 1); loadAgain(vid, x, false); }
+          return;
+        }
+      } else if (Date.now() - t0 > 4000 && d && d.video_id && d.video_id !== vid) return; // moved on
+      if (Date.now() - t0 < 20000) later(tick, 250);
+    };
+    later(tick, 250);
+  }
+
   // Runs on every player response before pruning.
   function review(x, initial) {
     const vd = x.videoDetails, ps = x.playabilityStatus;
     if (!vd || typeof vd.videoId !== 'string' || !ps || typeof ps !== 'object') return;
     const vid = vd.videoId;
     const mk = marked.get(vid);
-    const ours = (mk && Date.now() - mk.t < 30000) || (initial && fromAdFreeUrl());
+    let m = mk && Date.now() - mk.t < 30000 ? mk.m : -1;
+    if (m < 0 && initial) m = urlMethod;
     const ads = hasAds(x);
-    if (ours) {
+    if (m < 0 && verify && verify.vid === vid) {
+      // The normal retry is back. If it works, the method was at fault.
+      if (ps.status === 'OK') retire(verify.m);
+      verify = null;
+      return;
+    }
+    if (m >= 0) {
       const ac = x.playerConfig && x.playerConfig.audioConfig;
       if (ac && ac.muteOnStart) delete ac.muteOnStart;
       if (ps.status === 'OK' && !ps.miniplayer) ps.miniplayer = { miniplayerRenderer: { playbackMode: 'PLAYBACK_MODE_ALLOW' } };
       if (ps.status !== 'OK') {
-        // Refused with YouTube's "content isn't available" screen: this
-        // method stopped working. Play the video normally instead.
-        let refused = false;
-        try { refused = JSON.stringify(ps.errorScreen || '').indexOf('3037019') >= 0; } catch { /* ignore */ }
-        if (refused) { retire(mk ? mk.m : 0); reload(vid, x, true); }
+        if (!GENUINE.has(ps.status)) suspect(vid, m, x);
         return;
       }
-      if (ads) { retire(mk ? mk.m : 0); reload(vid, x, false); }
+      if (ads && METHODS[m].noAds) {
+        // Asked for no ads and got ads: this method no longer works.
+        retire(m);
+        if (!reloaded.has(vid) && method < METHODS.length) { reloaded.add(vid); loadAgain(vid, x, false); }
+        return;
+      }
+      watch(vid, m, x);
       return;
     }
     // Ads were scheduled in a response we did not ask for (the network
     // rule was off or missed this load): ask again, ad-free.
-    if (ads && adFree && ps.status === 'OK' && !vd.isLive && !vd.isUpcoming && location.pathname === '/watch') reload(vid, x, false);
+    if (ads && adFree && method < METHODS.length && !reloaded.has(vid) && ps.status === 'OK' && !vd.isLive && !vd.isUpcoming && location.pathname === '/watch') {
+      reloaded.add(vid);
+      loadAgain(vid, x, false);
+    }
   }
 
   // ---------------------------------------------------------- pruning

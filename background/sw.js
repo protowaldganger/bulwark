@@ -12,6 +12,7 @@ import { netFetch, SB_HOST } from './net.js';
 import { syncStaticRulesets, syncSystemRules, syncCustomRules, syncListDeltas, ruleStats, testUrl } from './rules.js';
 import { rebuildCosmeticIndex, buildCosmeticIndex, frameInit, genericTokens, applyNow, invalidateCustomCosmetic, forgetTab as forgetCosmeticTab, indexInfo, prepareFrame, appliedSelectors } from './cosmetic.js';
 import { syncRegistrations, onCommitted, getMeta, fallbackActive } from './scripts.js';
+import { ytRetireTo, ytStartMethod, ytResetMethod, YT_METHODS } from './ytadfree.js';
 import { updateLists, rebuildOverlay, listStates, forgetList, scheduleUpdates } from './updater.js';
 import { onCookieChanged, sweepSite, cookieSummary } from './cookies.js';
 import * as stats from './stats.js';
@@ -79,6 +80,11 @@ async function applyBadge() {
 }
 
 chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === 'bw-ytadfree') {
+    // Give the first ad-free method another chance.
+    serial(async () => { await syncSystemRules(); await syncRegistrations(); }).catch(e => report('yt-adfree', e));
+    return;
+  }
   if (a.name !== 'bw-update') return;
   // Strict privacy may have been switched on after the alarm was set.
   getSettings().then(s => { if (effective(s).autoUpdate) return updateLists(); chrome.alarms.clear('bw-update'); })
@@ -264,6 +270,8 @@ async function applySettings(patch) {
   if (patch.whitelist) next.whitelist = [...new Set(patch.whitelist.map(h => String(h).trim().toLowerCase().replace(/^www\./, '')).filter(isValidHostname))];
   await saveSettings(next);
   const changed = (k) => JSON.stringify(before[k]) !== JSON.stringify(next[k]);
+  // Switching ad-free playback back on starts again from the first method.
+  if (next.youtube && next.youtube.adFree && !(before.youtube && before.youtube.adFree)) await ytResetMethod();
   await serial(async () => {
     if (changed('lists') || changed('customLists') || changed('youtube')) await step('rulesets', syncStaticRulesets);
     if (changed('whitelist') || changed('cookies') || changed('enabled') || changed('youtube')) await step('system-rules', syncSystemRules);
@@ -387,7 +395,7 @@ async function optionsData() {
     catalog: LISTS,
     meta, states, rules: rs, lastSync, cosmetic: cosmeticInfo, lastUpdate,
     stats: dash, diagnostics: diagnostics(),
-    env: { version: VERSION, mainWorldFallback: fallbackActive(), debugCounting: !!DNR.onRuleMatchedDebug, ua: navigator.userAgent }
+    env: { version: VERSION, mainWorldFallback: fallbackActive(), debugCounting: !!DNR.onRuleMatchedDebug, ua: navigator.userAgent, ytMethod: await ytStartMethod(), ytMethods: YT_METHODS.length }
   };
 }
 
@@ -408,7 +416,7 @@ function validateImport(data) {
 
 // --------------------------------------------------------------- messages
 
-const CONTENT_MESSAGES = new Set(['frame-init', 'tokens', 'yt-stats', 'ck-stats', 'sb-segments', 'picker-add', 'picker-open-options']);
+const CONTENT_MESSAGES = new Set(['frame-init', 'tokens', 'yt-stats', 'yt-adfree-method', 'ck-stats', 'sb-segments', 'picker-add', 'picker-open-options']);
 
 async function handle(msg, sender) {
   // Only this extension's own pages and content scripts may talk to it.
@@ -422,6 +430,14 @@ async function handle(msg, sender) {
     case 'frame-init': return frameInit(sender, msg);
     case 'tokens': return genericTokens(sender, msg);
     case 'yt-stats': stats.countYouTube(tabId, msg); return null;
+    case 'yt-adfree-method': {
+      // A YouTube page found that the current ad-free method fails: start
+      // new pages at the next one (see background/ytadfree.js).
+      const url = (sender.tab && sender.tab.url) || sender.url || '';
+      if (!/^https:\/\/(www\.)?youtube\.com\//.test(url)) return null;
+      if (await ytRetireTo(msg.m | 0)) await serial(async () => { await syncSystemRules(); await syncRegistrations(); });
+      return null;
+    }
     case 'ck-stats': stats.countShimCookies(tabId, msg.n | 0); return null;
     case 'sb-segments': return sponsorSegments(msg.id, msg.categories);
     case 'picker-add': {

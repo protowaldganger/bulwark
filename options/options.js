@@ -204,7 +204,9 @@ const VIEWS = {
         <div class="head"><h2>Ads</h2></div>
         <div class="rows">
           ${opt('prune', y.prune, 'Remove ads from player data', 'Strips pre-roll, mid-roll and anti-adblock payloads before playback, so no ad is ever scheduled.')}
-          ${opt('adFree', y.adFree, 'Ask for ad-free playback', 'Requests the version of each video that YouTube serves without ads, so there is no ad to remove and no spinner before the video starts. If videos stop playing, turn this off.', !y.prune)}
+          ${row('Ask for ad-free playback', 'Requests the version of each video that YouTube serves without ads, so there is no ad to remove and no spinner before the video starts. If YouTube refuses one way of asking, Bulwark switches to the next by itself and plays the video normally meanwhile.',
+            sw('y-adFree', y.adFree && y.prune, `data-yt="adFree" ${y.prune ? '' : 'disabled'}`),
+            y.adFree && y.prune ? (data.env.ytMethod < data.env.ytMethods ? `Method ${data.env.ytMethod + 1} of ${data.env.ytMethods}` : 'No method works right now: ads are removed instead. Bulwark tries again later.') : '')}
           ${opt('blockPings', y.blockPings, 'Block ad requests', 'Native network rules for YouTube ad endpoints and ad trackers.')}
           ${opt('skipper', y.skipper, 'Fallback skipper', 'If an ad still starts, it is muted, sped up and skipped, then your volume and speed come back.')}
         </div>

@@ -4,6 +4,7 @@
 import { LISTS, YT_RULESET } from '../engine/lists.js';
 import { PRIORITY, compileCustom, validateRule, adaptRuleForSafari } from '../engine/compiler.js';
 import { TRACKER_COOKIE_DOMAINS, ENTITY_GROUPS } from '../engine/cookies.js';
+import { YT_METHODS, ytStartMethod } from './ytadfree.js';
 import { getSettings, getCustomFilters, report, isValidHostname, isWhitelisted, IS_SAFARI } from './state.js';
 import * as idb from './idb.js';
 import { ID, dynamicState } from './ids.js';
@@ -95,7 +96,7 @@ export async function syncStaticRulesets() {
 
 // ---------------------------------------------------------- system rules
 
-export function buildSystemRules(s) {
+export function buildSystemRules(s, ytStart = 0) {
   const rules = [];
   const wl = s.whitelist.filter(isValidHostname);
   if (wl.length) {
@@ -113,19 +114,20 @@ export function buildSystemRules(s) {
     });
   }
 
-  // YouTube page loads ask for the ad-free variant of the video (pp=eAE=,
-  // see content/youtube-main.js). A pp parameter that a link already
-  // carries (search and recommendation tracking) is replaced; the allow
-  // rule stops the redirect once the URL has ours.
-  if (s.enabled && s.youtube.prune && s.youtube.adFree && !isWhitelisted('www.youtube.com', s)) {
+  // YouTube page loads ask for the ad-free variant of the video through the
+  // pp parameter of the current method (see background/ytadfree.js). A pp
+  // that a link already carries (search and recommendation tracking) is
+  // replaced; the allow rule stops the redirect once the URL has ours.
+  const ytMethod = YT_METHODS[ytStart];
+  if (s.enabled && s.youtube.prune && s.youtube.adFree && ytMethod && ytMethod.pp && !isWhitelisted('www.youtube.com', s)) {
     rules.push({
       id: ID.ytAdFreeAllow, priority: PRIORITY.whitelist - 1,
       action: { type: 'allow' },
-      condition: { regexFilter: '^https://(www\\.)?youtube\\.com/watch\\?([^#]*&)?pp=eAE[%=]', resourceTypes: ['main_frame'] }
+      condition: { regexFilter: '^https://(www\\.)?youtube\\.com/watch\\?([^#]*&)?pp=' + ytMethod.pp, resourceTypes: ['main_frame'] }
     });
     rules.push({
       id: ID.ytAdFree, priority: PRIORITY.whitelist - 2,
-      action: { type: 'redirect', redirect: { transform: { queryTransform: { addOrReplaceParams: [{ key: 'pp', value: 'eAE=' }] } } } },
+      action: { type: 'redirect', redirect: { transform: { queryTransform: { addOrReplaceParams: [{ key: 'pp', value: ytMethod.pp }] } } } },
       condition: { regexFilter: '^https://(www\\.)?youtube\\.com/watch\\?', resourceTypes: ['main_frame'] }
     });
   }
@@ -175,7 +177,7 @@ export function buildSystemRules(s) {
 
 export async function syncSystemRules() {
   const s = await getSettings();
-  const rules = buildSystemRules(s);
+  const rules = buildSystemRules(s, await ytStartMethod());
   const existing = await dynamicRules();
   const remove = idsInRange(existing, 1, ID.customBase);
   // Cookie rules may be unsupported on some engines (e.g. WebKit hosts);

@@ -28,7 +28,15 @@
 
   // Private channel from the MAIN-world pruner (see youtube-main.js).
   const onStats = (e) => {
-    const [p, c, n] = String(e.detail).split(',').map(x => parseInt(x, 10) || 0);
+    const d = String(e.detail);
+    // "m<N>": the page found that ad-free method N-1 fails; new pages
+    // should start at method N (see background/ytadfree.js).
+    if (d.charAt(0) === 'm') {
+      const m = parseInt(d.slice(1), 10);
+      if (m > 0 && m < 10) { try { chrome.runtime.sendMessage({ t: 'yt-adfree-method', m }).catch(() => {}); } catch { /* extension reloaded */ } }
+      return;
+    }
+    const [p, c, n] = d.split(',').map(x => parseInt(x, 10) || 0);
     counters.pruned += p; counters.cost += c; counters.samples += n;
     bump();
   };

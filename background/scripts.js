@@ -14,6 +14,7 @@ import { bulwarkScriptlets } from '../engine/scriptlets.js';
 import { hostKeys } from '../engine/compiler.js';
 import { getSettings, matchPatternsFor, isValidHostname, report, isWhitelisted, hostOf, rawHostOf, cookiePolicyFor } from './state.js';
 import * as idb from './idb.js';
+import { ytStartMethod, ytFlagFile } from './ytadfree.js';
 
 export const YT_MATCHES = [
   '*://*.youtube.com/*', '*://youtube.com/*', '*://*.youtube-nocookie.com/*', '*://*.youtubekids.com/*'
@@ -64,10 +65,11 @@ async function scriptletHosts(id) {
   return Object.keys(await bundledScriptletTable(id)).filter(h => !h.endsWith('.*'));
 }
 
-// youtube-flag.js runs first and tells youtube-main.js that ad-free
-// requests are on.
-function ytMainFiles(s) {
-  return s.youtube.adFree ? ['content/youtube-flag.js', 'content/youtube-main.js'] : ['content/youtube-main.js'];
+// A youtube-flag-N.js file runs first and tells youtube-main.js that
+// ad-free requests are on and which method to start with.
+async function ytMainFiles(s) {
+  const flag = s.youtube.adFree ? ytFlagFile(await ytStartMethod()) : null;
+  return flag ? [flag, 'content/youtube-main.js'] : ['content/youtube-main.js'];
 }
 
 function whitelistPatterns(s) {
@@ -82,7 +84,7 @@ async function desiredScripts() {
   const withExclude = (o) => (exclude.length ? { ...o, excludeMatches: exclude } : o);
 
   if (s.enabled) {
-    if (s.youtube.prune) out.push(withExclude({ id: 'bw-yt-main', matches: YT_MATCHES, js: ytMainFiles(s), world: 'MAIN', ...common }));
+    if (s.youtube.prune) out.push(withExclude({ id: 'bw-yt-main', matches: YT_MATCHES, js: await ytMainFiles(s), world: 'MAIN', ...common }));
     out.push(withExclude({ id: 'bw-yt-iso', matches: YT_MATCHES, js: ['content/youtube-iso.js'], css: ['content/youtube.css'], ...common }));
     for (const l of LISTS) {
       if (!l.bundled || !s.lists[l.id]) continue;
@@ -206,7 +208,7 @@ export async function onCommitted(details) {
 
   if (fallback) {
     const files = [];
-    if (s.youtube.prune && /(^|\.)(youtube\.com|youtube-nocookie\.com|youtubekids\.com)$/.test(host)) files.push(...ytMainFiles(s));
+    if (s.youtube.prune && /(^|\.)(youtube\.com|youtube-nocookie\.com|youtubekids\.com)$/.test(host)) files.push(...await ytMainFiles(s));
     for (const l of LISTS) {
       if (!l.bundled || !s.lists[l.id]) continue;
       const hosts = await scriptletHosts(l.id);

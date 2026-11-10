@@ -1,10 +1,14 @@
 # Bulwark Ad Blocker
 
-By protowaldganger. Current version: **1.2.0**.
+By protowaldganger. Current version: **1.2.1**.
 
 A private, fast Manifest V3 ad and tracker blocker for Chrome-based browsers and Safari. It is built around one goal: YouTube with no ads and no wait. It compiles the filter lists Brave Shields ships by default into native browser rules, and adds a dedicated YouTube engine, per-site cookie control and a strict privacy mode.
 
 Bulwark has no servers, no accounts and no telemetry. With strict privacy on (the default) it makes no network request at all unless you press **Check for updates**.
+
+## What's new in 1.2.1
+
+- **YouTube no longer gets stuck on "Something went wrong".** When YouTube answered an ad-free request with its error screen, 1.2.0 left the error up. Bulwark now has six ways of asking, notices when YouTube refuses one or holds the video back anyway, plays the video normally right away, and switches to the next way for every video after that. **Options > YouTube** shows which method is in use.
 
 ## What's new in 1.2.0
 
@@ -87,7 +91,7 @@ Supported syntax covers what real lists use: `||domain^`, wildcards, anchors, `/
 
 Four layers, cheapest first:
 
-1. **Ad-free playback requests.** When YouTube schedules ads for a video and a blocker removes them, YouTube's streaming server still holds back the first seconds of video for about 80% of the ads' length, so the video sits on a spinner with no ad ("fake buffering"). Bulwark avoids this by asking for the variant of the video that YouTube serves without ads: player requests get field 15 of their `params` blob set (merged into any params already there), and page loads get the same through a `pp` parameter set by a network rule. That variant starts muted and hides the miniplayer button, so both are put back. If YouTube still sends ads or refuses the variant, Bulwark switches to the next method (`isInlinePlaybackNoAd`) and reloads the video once. This layer leaves Shorts, embedded players, hover previews and live streams alone; the other layers still cover them. Measured on YouTube in October 2026: about 13 s to the first frame with pruning alone, under 1 s with ad-free requests. Option: **Ask for ad-free playback** (on by default).
+1. **Ad-free playback requests.** When YouTube schedules ads for a video and a blocker removes them, YouTube's streaming server still holds back the first seconds of video for about 80% of the ads' length, so the video sits on a spinner with no ad ("fake buffering"). Bulwark avoids this by changing how it asks for the video. The best methods ask for the variant YouTube serves without ads (fields 12, 15 and 100, or 15 and 12, of the player request's `params` blob, merged into any params already there; page loads get the same through a `pp` parameter set by a network rule). That variant starts muted and hides the miniplayer button, so both are put back. YouTube changes which forms it accepts, so there are six methods, following uBlock Origin's quick fixes; the later ones still get ads (which are pruned) but no wait. A method is retired when it gets ads it should not, when the video is held back anyway, or when it ends in YouTube's error screen while a normal request for the same video plays. The video is then loaded again, new pages start with the next method, and after 12 hours the first method gets another chance. Shorts, embedded players, hover previews and live streams are left to the other layers. Measured on YouTube in October 2026: about 13 s to the first frame with pruning alone, under 1 s with ad-free requests. Option: **Ask for ad-free playback** (on by default); switching it off and on starts again from the first method.
 2. **Payload pruning.** YouTube's ad schedule (`adPlacements`, `adSlots`, `playerAds`, `adBreakHeartbeatParams`) is removed from the player data before the player reads it, through `JSON.parse`, `Response.json()` and the inline `ytInitialPlayerResponse` / `ytInitialData`. No ad is ever played. On its own this does not stop the start-up wait described above, which is why layer 1 exists. The same pass removes the anti-adblock dialog payload, the ads panel and Shorts ads. Cost: about 10 to 20 µs per player response.
    The page hooks also drop the player's "abnormality" listener (which swaps the video for the anti-adblock screen) and run a fixed 17 s penalty timer at once.
 3. **Network rules** for ad pings, `pagead`, `ad_break` and DoubleClick from YouTube pages. The `ad_status.js` detection bait gets a surrogate instead of being blocked.
@@ -151,7 +155,7 @@ Bundled lists ship as static rulesets. An update downloads the list, compiles it
 npm install                  # esbuild, jsdom, fake-indexeddb (build and tests only)
 npm run build                # download lists, compile, produce dist/ and dist-safari/
 npm run build:offline        # same, from cached lists
-npm test                     # 62 tests against the source (run a build first)
+npm test                     # 64 tests against the source (run a build first)
 BW_DIST=1 npm test           # the same tests against dist/
 npm run test:safari          # every Safari rule checked against what Safari accepts
 ```
