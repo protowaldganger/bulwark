@@ -12,7 +12,7 @@ import { LISTS } from '../engine/lists.js';
 import { compileList, ruleKey, fnv1a, adaptRuleForSafari } from '../engine/compiler.js';
 import { getSettings, report, serial, effective, netPolicy, IS_SAFARI } from './state.js';
 import { netFetch } from './net.js';
-import { syncListDeltas } from './rules.js';
+import { syncListDeltas, regexAccepted } from './rules.js';
 import { rebuildCosmeticIndex } from './cosmetic.js';
 import { setOverlay, getMeta, bundledScriptletTable } from './scripts.js';
 import * as idb from './idb.js';
@@ -85,7 +85,13 @@ export async function updateOne(def, force) {
   if (def.bundled) {
     const old = await bundledHashes(def.id);
     // The Safari build ships adapted rules, so compare like with like.
-    const freshRules = IS_SAFARI ? compiled.rules.map(adaptRuleForSafari).filter(Boolean) : compiled.rules;
+    let freshRules = IS_SAFARI ? compiled.rules.map(adaptRuleForSafari).filter(Boolean) : compiled.rules;
+    // Regular expressions the browser skips never count as changes.
+    if (freshRules.some(r => r.condition.regexFilter)) {
+      const keep = [];
+      for (const r of freshRules) if (await regexAccepted(r)) keep.push(r);
+      freshRules = keep;
+    }
     const fresh = new Map();
     for (const r of freshRules) fresh.set(ruleKey(r), r);
     const oldSet = new Set(old);

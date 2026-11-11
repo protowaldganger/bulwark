@@ -21,6 +21,6 @@ The certificate lasts a year. The built app carries your Apple Account name in i
 ## Differences from the Chrome version
 
 - The "Requests blocked" count comes from Safari's list of matched rules when you open the popup. There are no per-day request totals, and the URL tester is hidden.
-- About 80 of 17,500 rules use features Safari does not support (some regular expressions, request-method rules and rare request types). They are left out, not run with a different meaning.
+- About 50 of 17,500 rules use features Safari does not support (some regular expressions, request-method rules and rare request types). They are left out, not run with a different meaning.
 - Cookies are stripped from requests. Safari cannot remove cookies from responses, but its own tracking prevention already blocks third-party cookies.
 - List updates add new rules but cannot switch off ones the list maintainers removed. Rebuilding clears those out.

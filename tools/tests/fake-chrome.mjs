@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { validateRule } from '../../engine/compiler.js';
 import { evaluate } from './dnr-matcher.mjs';
+const REGEX_VERDICTS = (() => { try { return JSON.parse(fs.readFileSync(new URL('../regex-support.json', import.meta.url), 'utf8')); } catch { return {}; } })();
 
 function event() {
   const fns = [];
@@ -87,8 +88,18 @@ export function createChrome(root, { fetchFixtures = {}, safari = false } = {}) 
     },
     async getAvailableStaticRuleCount() { return STATIC_POOL - staticCount(); },
     async getDynamicRules() { return structuredClone(dynamic); },
+    // Stand-in for RE2's 2 KB program limit: large counted repeats.
+    // Uses Chromium's own answers recorded by the build where it has them.
+    async isRegexSupported({ regex, isCaseSensitive = false }) {
+      const known = REGEX_VERDICTS[(isCaseSensitive ? '1' : '0') + regex];
+      if (known !== undefined) return known === true ? { isSupported: true } : { isSupported: false, reason: known };
+      return /\{(\d{2,})/.test(regex) && +RegExp.$1 >= 25 ? { isSupported: false, reason: 'memoryLimitExceeded' } : { isSupported: true };
+    },
     async updateDynamicRules({ removeRuleIds = [], addRules = [] }) {
       const rm = new Set(removeRuleIds);
+      for (const r of addRules) {
+        if (r.condition.regexFilter && !(await this.isRegexSupported({ regex: r.condition.regexFilter, isCaseSensitive: !!r.condition.isUrlFilterCaseSensitive })).isSupported) throw new Error(`Rule with id ${r.id} specified a more complex regex than allowed as part of the "regexFilter" key.`);
+      }
       const next = dynamic.filter(r => !rm.has(r.id));
       const ids = new Set(next.map(r => r.id));
       for (const r of addRules) {

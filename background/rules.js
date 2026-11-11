@@ -36,9 +36,29 @@ async function dynamicRules() {
 
 // Adds rules in batches. If Chrome rejects a batch (one invalid rule fails
 // the whole call), the batch is split until the bad rule is isolated.
+// The browser skips (Chrome: over 2 KB compiled) or rejects some regular
+// expressions; ask it first instead of failing a whole batch.
+const regexVerdicts = new Map();
+export async function regexAccepted(r) {
+  const c = r.condition;
+  if (!c.regexFilter || typeof DNR.isRegexSupported !== 'function') return true;
+  const k = (c.isUrlFilterCaseSensitive ? '1' : '0') + c.regexFilter;
+  if (!regexVerdicts.has(k)) {
+    let ok = true;
+    try { ok = (await DNR.isRegexSupported({ regex: c.regexFilter, isCaseSensitive: !!c.isUrlFilterCaseSensitive })).isSupported !== false; } catch { /* keep */ }
+    regexVerdicts.set(k, ok);
+  }
+  return regexVerdicts.get(k);
+}
+
 export async function safeUpdateDynamic(removeRuleIds, addRules) {
   dynamicState.version++;
   if (IS_SAFARI) addRules = addRules.map(adaptRuleForSafari).filter(Boolean);
+  if (addRules.some(r => r.condition.regexFilter)) {
+    const keep = [];
+    for (const r of addRules) if (await regexAccepted(r)) keep.push(r);
+    addRules = keep;
+  }
   if (removeRuleIds.length) {
     try { await DNR.updateDynamicRules({ removeRuleIds }); }
     catch (e) { report('dnr-remove', e); }

@@ -17,6 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 import { LISTS, YT_RULESET } from '../engine/lists.js';
+import { regexSupport } from './regex-support.mjs';
 import { compileList, validateRule, fnv1a, badfilterKey, preprocess, packCosmetic, finalizeRules, adaptRuleForSafari } from '../engine/compiler.js';
 import { buildScriptletFile, bulwarkScriptlets } from '../engine/scriptlets.js';
 import { TRACKER_COOKIE_SOURCE, ENTITY_GROUPS } from '../engine/cookies.js';
@@ -81,18 +82,30 @@ async function compileAll() {
 
   const meta = { builtAt: Date.now(), lists: {} };
   const compiled = {};
+  const raw = {};
   for (const l of bundled) {
     const t0 = performance.now();
-    const c = compileList(texts[l.id], { badfilters: globalBad });
+    raw[l.id] = { c: compileList(texts[l.id], { badfilters: globalBad }), ms: performance.now() - t0 };
+  }
+  // Regular expressions Chrome would skip (over its 2 KB compiled limit).
+  const regexOk = await regexSupport(Object.values(raw).flatMap(x => x.c.rules), log);
+  for (const l of bundled) {
+    const t0 = performance.now();
+    const c = raw[l.id].c;
     // Chrome allows 1000 regex rules per static ruleset.
-    let regex = 0;
-    const kept = c.rules.filter(r => !r.condition.regexFilter || regex++ < REGEX_LIMIT);
+    let regex = 0, skipped = 0;
+    const kept = c.rules.filter(r => {
+      if (!r.condition.regexFilter) return true;
+      if (!regexOk(r)) { skipped++; return false; }
+      return regex++ < REGEX_LIMIT;
+    });
+    if (skipped) log(`  ${l.id}: ${skipped} regular expressions too large for Chrome, left out`);
     const rules = kept.length === c.rules.length ? c.rules : finalizeRules(kept);
     for (const r of rules) {
       const err = validateRule(r);
       if (err) throw new Error(`${l.id} rule ${r.id} invalid: ${err}`);
     }
-    compiled[l.id] = { ...c, rules, quiet: rules.quiet, ms: Math.round(performance.now() - t0), regex: Math.min(regex, REGEX_LIMIT) };
+    compiled[l.id] = { ...c, rules, quiet: rules.quiet, ms: Math.round(raw[l.id].ms + performance.now() - t0), regex: Math.min(regex, REGEX_LIMIT) };
   }
 
   // Scriptlet exceptions are global (#@#+js in one list cancels another).

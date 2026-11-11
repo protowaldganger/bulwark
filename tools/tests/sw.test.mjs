@@ -233,6 +233,16 @@ test('custom filters become top-priority rules, CSS and scriptlets', async () =>
   assert.deepEqual(inj.args[0], [['set-constant', 'adsEnabled', 'false']]);
 });
 
+test('regular expressions the browser would skip are left out, the rest still apply', async () => {
+  const before = env.log.errors ? env.log.errors.length : 0;
+  await msg({ t: 'save-custom-filters', text: ['/(https?:\\/\\/)\\w{30,}\\.me\\/\\w{30,}\\./$script,3p', '||kept-after-regex.example^', '/ad[0-9]+\\.js/$script'].join('\n') });
+  const custom = env.dynamicRules().filter(r => r.id >= 1000 && r.id < 100000);
+  assert.ok(!custom.some(r => (r.condition.regexFilter || '').includes('{30,}')), 'oversized regex left out');
+  assert.ok(custom.some(r => r.condition.regexFilter === 'ad[0-9]+\\.js'), 'normal regex kept');
+  assert.ok(custom.some(r => (r.condition.urlFilter || '').includes('kept-after-regex.example') || (r.condition.requestDomains || []).includes('kept-after-regex.example')));
+  void before;
+});
+
 test('picker adds a cosmetic filter for the frame host and applies it immediately', async () => {
   log.insertCSS.length = 0;
   const r = await msg({ t: 'picker-add', selector: 'div.sticky-ad' }, contentSender(tabEx, 'https://www.example.com/article'));

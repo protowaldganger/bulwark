@@ -306,6 +306,13 @@ export function badfilterKey(line) {
 
 // Parses one network filter. Returns { rule } (without id) or { flags }
 // for cosmetic-exception filters, or { skip: reason }.
+// A trailing open repeat (`.{100,}` at the very end) matches exactly when
+// its minimum does, because matching is unanchored at the end. The bounded
+// form compiles far smaller in RE2, which Chrome limits to 2 KB per rule.
+export function shrinkRegex(src) {
+  return src.replace(/(\.|\\[wdsWDS]|\[[^\]\\]*(?:\\.[^\]\\]*)*\])\{(\d+),\}$/, (m, atom, n) => `${atom}{${n}}`);
+}
+
 export function parseNetworkFilter(raw, ctx = {}) {
   let line = raw;
   const hm = HOSTS_LINE.exec(line);
@@ -431,7 +438,7 @@ export function parseNetworkFilter(raw, ctx = {}) {
   if (pattern.length > 2 && pattern.startsWith('/') && pattern.endsWith('/')) {
     const src = pattern.slice(1, -1);
     if (!isRe2Compatible(src) || !ASCII_RE.test(src)) return { skip: 'regex' };
-    cond.regexFilter = src;
+    cond.regexFilter = shrinkRegex(src);
   } else {
     if (!ASCII_RE.test(pattern)) {
       const m = /^(\|\|)([^/^:?*]+)(.*)$/.exec(pattern);

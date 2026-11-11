@@ -1,10 +1,14 @@
 # Bulwark Ad Blocker
 
-By protowaldganger. Current version: **1.2.1**.
+By protowaldganger. Current version: **1.2.2**.
 
 A private, fast Manifest V3 ad and tracker blocker for Chrome-based browsers and Safari. It is built around one goal: YouTube with no ads and no wait. It compiles the filter lists Brave Shields ships by default into native browser rules, and adds a dedicated YouTube engine, per-site cookie control and a strict privacy mode.
 
 Bulwark has no servers, no accounts and no telemetry. With strict privacy on (the default) it makes no network request at all unless you press **Check for updates**.
+
+## What's new in 1.2.2
+
+- **No more warnings on the extensions page.** Chrome and Brave skip regular-expression rules that compile to more than 2 KB, and listed a warning for each one. The build now asks Chromium which expressions it accepts and leaves the 27 oversized ones out (list updates check the same way), and expressions that end in an open repeat are rewritten to a smaller equivalent form. Nothing that was blocking before stops blocking: the browser was already skipping these rules.
 
 ## What's new in 1.2.1
 
@@ -76,7 +80,7 @@ What no extension can hide: a site can notice its ads did not load, and every si
 
 All request blocking is done by the browser's native `declarativeNetRequest` engine before a request starts. There is no JavaScript on the request path.
 
-About 145,000 filters from EasyList, EasyPrivacy, uBlock filters (ads, quick fixes, unbreak, privacy) and Brave's unbreak and specific lists compile into about 17,500 native rules. Plain `||host^` filters that share the same options are merged into one rule with a list of request domains, the technique uBlock Origin Lite uses, so Chrome indexes far fewer rules with identical matching. Exceptions beat blocks, `$important` beats exceptions, your own filters beat every list, and the per-site switch beats everything.
+About 145,000 filters from EasyList, EasyPrivacy, uBlock filters (ads, quick fixes, unbreak, privacy) and Brave's unbreak and specific lists compile into about 17,500 native rules. Regular expressions the browser would skip for size (over 2 KB compiled) are left out at build time; the build checks them in Chromium and records the answers in `tools/regex-support.json`. Plain `||host^` filters that share the same options are merged into one rule with a list of request domains, the technique uBlock Origin Lite uses, so Chrome indexes far fewer rules with identical matching. Exceptions beat blocks, `$important` beats exceptions, your own filters beat every list, and the per-site switch beats everything.
 
 Supported syntax covers what real lists use: `||domain^`, wildcards, anchors, `/regex/`, `$third-party`, `$domain=`, `$to=`, `$denyallow=`, `$method=`, resource types, `$important`, `$match-case`, `$document`, `$redirect=` (with neutered surrogates for Google IMA, GPT, GTM, Analytics and others), `$removeparam=`, cross-list `$badfilter`, and `$generichide` / `$elemhide` / `$specifichide`. Filters that cannot be expressed natively (`$popup`, `$csp`, `$replace`, HTML filtering) are skipped rather than applied with a different meaning.
 
@@ -124,7 +128,7 @@ Monochrome ink on white, Apple's system typeface (San Francisco on macOS), pill 
 | Installed size | 16.6 MB | 6.1 MB | 6.1 MB |
 | Files | 101 | 66 | 68 |
 | Download (zip) | 2.7 MB | 1.7 MB | 1.7 MB |
-| Native rules Chrome must index | 117,951 | 17,538 | 17,538 |
+| Native rules Chrome must index | 117,951 | 17,538 | 17,511 |
 | Service worker | 15 modules | 1 file, 83 KB | 1 file, 86 KB |
 
 Nothing was removed to get there. Merged host rules, a compact cosmetic format that stores each selector once, scriptlet data that ships once instead of twice, rule hashes recomputed on demand instead of shipped, minified code, and an "off" icon drawn at runtime do the work.
@@ -137,7 +141,7 @@ Speed changes in 1.1: CSS injection at navigation commit; cached per-site plans 
 
 Safari on macOS runs web extensions from inside a small Mac app, so Bulwark for Safari is built on your own Mac with Xcode (Safari 16.4 or later).
 
-1. `npm install && npm run build`. Besides `dist/`, this writes the Safari version to `dist-safari/`: rules are rewritten into the subset Safari supports (about 80 of 17,500 are left out), and features Safari lacks are detected at runtime.
+1. `npm install && npm run build`. Besides `dist/`, this writes the Safari version to `dist-safari/`: rules are rewritten into the subset Safari supports (about 50 of 17,500 are left out), and features Safari lacks are detected at runtime.
 2. `bash safari/build-safari.command` wraps it in an app, builds it, installs it as `~/Applications/Bulwark.app` and opens it once.
 3. In Safari: **Settings > Extensions**, tick **Bulwark Ad Blocker** and click **Always Allow on Every Website...**.
 
@@ -153,9 +157,10 @@ Bundled lists ship as static rulesets. An update downloads the list, compiles it
 
 ```sh
 npm install                  # esbuild, jsdom, fake-indexeddb (build and tests only)
+npm install -g playwright    # optional: lets the build check new regular expressions in Chromium
 npm run build                # download lists, compile, produce dist/ and dist-safari/
 npm run build:offline        # same, from cached lists
-npm test                     # 64 tests against the source (run a build first)
+npm test                     # 65 tests against the source (run a build first)
 BW_DIST=1 npm test           # the same tests against dist/
 npm run test:safari          # every Safari rule checked against what Safari accepts
 ```
