@@ -1,10 +1,14 @@
 # Bulwark Ad Blocker
 
-By protowaldganger. Current version: **1.2.2**.
+By protowaldganger. Current version: **1.2.3**.
 
 A private, fast Manifest V3 ad and tracker blocker for Chrome-based browsers and Safari. It is built around one goal: YouTube with no ads and no wait. It compiles the filter lists Brave Shields ships by default into native browser rules, and adds a dedicated YouTube engine, per-site cookie control and a strict privacy mode.
 
 Bulwark has no servers, no accounts and no telemetry. With strict privacy on (the default) it makes no network request at all unless you press **Check for updates**.
+
+## What's new in 1.2.3
+
+- **Cookie banners stay answered.** With **Necessary only**, Bulwark removed the cookie some sites use to remember your cookie-banner choice, so the banner came back on every visit (X stores it as `d_prefs`). Your answer to a cookie banner is now kept as a necessary cookie on X and on sites that use common consent-tool names; tracking cookies are still removed.
 
 ## What's new in 1.2.2
 

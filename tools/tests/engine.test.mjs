@@ -105,6 +105,13 @@ test('cookie classification', () => {
   assert.equal(keepCookie({ name: 'PHPSESSID', session: true }, 'block'), false);
   assert.equal(keepCookie({ name: 'theme', session: false }, 'allow'), true);
   assert.equal(keepCookie({ name: '_ga', session: false }, 'allow'), false);
+  // Cookie-banner choices are consent records: kept, so banners stay answered.
+  assert.equal(keepCookie({ name: 'd_prefs', session: false }, 'necessary', null, 'x.com'), true, 'X');
+  assert.equal(keepCookie({ name: 'd_prefs', session: false }, 'necessary', null, 'example.com'), false, 'only on X');
+  for (const n of ['cookies_policy', 'cookie_preferences', 'ckns_policy', 'cookie-agreed', 'cookiesAccepted', 'cookie_notice_accepted', 'didomi_token', 'usprivacy', 'cmplz_marketing', 'notice_preferences']) {
+    assert.equal(keepCookie({ name: n, session: false }, 'necessary'), true, n);
+  }
+  assert.equal(keepCookie({ name: 'personalization_id', session: false }, 'necessary', null, 'x.com'), false);
 });
 
 test('cookie guard drops tracker writes in necessary mode and everything in block mode', () => {

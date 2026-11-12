@@ -1,6 +1,6 @@
 {
   "name": "bulwark-adblock",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "private": true,
   "type": "module",
   "description": "Bulwark: Manifest V3 ad blocker with first-class YouTube ad removal and cookie control.",
