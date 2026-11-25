@@ -6,13 +6,14 @@
 //   bw-yt-iso       YouTube skipper, SponsorBlock, YouTube CSS
 //   bw-sl-<list>    list scriptlets, matched to the hosts that use them
 //   bw-ck-<mode>    document.cookie guards per cookie policy
+//   bw-gpc          navigator.globalPrivacyControl
 // When the engine cannot run MAIN-world registered scripts (some WebKit
 // hosts), the same files are injected on navigation commit instead.
 
 import { LISTS } from '../engine/lists.js';
 import { bulwarkScriptlets } from '../engine/scriptlets.js';
 import { hostKeys } from '../engine/compiler.js';
-import { getSettings, matchPatternsFor, isValidHostname, report, isWhitelisted, hostOf, rawHostOf, cookiePolicyFor } from './state.js';
+import { getSettings, matchPatternsFor, isValidHostname, report, isWhitelisted, hostOf, rawHostOf, cookiePolicyFor, isBrave } from './state.js';
 import * as idb from './idb.js';
 import { ytStartMethod, ytFlagFile } from './ytadfree.js';
 
@@ -84,7 +85,11 @@ async function desiredScripts() {
   const withExclude = (o) => (exclude.length ? { ...o, excludeMatches: exclude } : o);
 
   if (s.enabled) {
-    if (s.youtube.prune) out.push(withExclude({ id: 'bw-yt-main', matches: YT_MATCHES, js: await ytMainFiles(s), world: 'MAIN', ...common }));
+    // In Brave, Shields handles YouTube video ads (see isBrave). Bulwark only
+    // marks the player so Shields asks for the ad-free version the way that
+    // works first (content/youtube-brave.js).
+    if (s.youtube.prune && !isBrave()) out.push(withExclude({ id: 'bw-yt-main', matches: YT_MATCHES, js: await ytMainFiles(s), world: 'MAIN', ...common }));
+    if (isBrave() && s.youtube.adFree) out.push(withExclude({ id: 'bw-yt-brave', matches: ['*://www.youtube.com/*'], js: ['content/youtube-brave.js'], world: 'MAIN', runAt: 'document_start', allFrames: false, persistAcrossSessions: true }));
     out.push(withExclude({ id: 'bw-yt-iso', matches: YT_MATCHES, js: ['content/youtube-iso.js'], css: ['content/youtube.css'], ...common }));
     for (const l of LISTS) {
       if (!l.bundled || !s.lists[l.id]) continue;
@@ -92,6 +97,11 @@ async function desiredScripts() {
       if (!matches.length) continue;
       out.push(withExclude({ id: 'bw-sl-' + l.id, matches, js: [`generated/scriptlets/${l.id}.js`], world: 'MAIN', ...common }));
     }
+  }
+
+  // navigator.globalPrivacyControl, matching the Sec-GPC header rule.
+  if (s.enabled && s.privacy && s.privacy.gpc) {
+    out.push({ id: 'bw-gpc', matches: ['http://*/*', 'https://*/*'], js: ['content/gpc.js'], world: 'MAIN', ...common });
   }
 
   // Cookie guards are independent of the ad-blocking whitelist.
@@ -208,12 +218,14 @@ export async function onCommitted(details) {
 
   if (fallback) {
     const files = [];
-    if (s.youtube.prune && /(^|\.)(youtube\.com|youtube-nocookie\.com|youtubekids\.com)$/.test(host)) files.push(...await ytMainFiles(s));
+    if (s.youtube.prune && !isBrave() && /(^|\.)(youtube\.com|youtube-nocookie\.com|youtubekids\.com)$/.test(host)) files.push(...await ytMainFiles(s));
+    if (isBrave() && s.youtube.adFree && frameId === 0 && host === 'www.youtube.com') files.push('content/youtube-brave.js');
     for (const l of LISTS) {
       if (!l.bundled || !s.lists[l.id]) continue;
       const hosts = await scriptletHosts(l.id);
       if (hosts.some(h => host === h || host.endsWith('.' + h))) files.push(`generated/scriptlets/${l.id}.js`);
     }
+    if (s.privacy && s.privacy.gpc) files.unshift('content/gpc.js');
     const policy = cookiePolicyFor(host, s);
     if (policy !== 'allow') files.push(`generated/cookie-${policy}.js`);
     if (files.length) {

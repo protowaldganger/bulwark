@@ -13,8 +13,9 @@
 
 import { LISTS } from '../engine/lists.js';
 import { mergeCosmetic, unpackCosmetic, hostKeys, isYouTubeHost } from '../engine/compiler.js';
-import { getSettings, isWhitelisted, hostOf, rawHostOf, report, serial } from './state.js';
+import { getSettings, isWhitelisted, hostOf, rawHostOf, report, serial, siteSwitches } from './state.js';
 import * as idb from './idb.js';
+import { setPopupFilters } from './popups.js';
 
 const HIDE = '{display:none!important}';
 let tokenSet = null;           // Set of generic tokens
@@ -47,6 +48,8 @@ export async function buildCosmeticIndex() {
     await idb.replaceAll('spec', merged.spec);
     await idb.replaceAll('gen', merged.gen);
     await idb.kv.set('hg', merged.hg);
+    await idb.kv.set('popupsLists', merged.pu || []);
+    await refreshPopups();
     await idb.kv.set('tokens', Object.keys(merged.gen));
     tokenSet = new Set(Object.keys(merged.gen));
     hgCss = merged.hg;
@@ -73,6 +76,15 @@ async function ensureLoaded() {
     const rec = await idb.get('lists', '__custom__');
     custom = unpackCosmetic(rec && rec.cosmetic) || { spec: {}, gen: {}, hg: [] };
   }
+}
+
+// Pop-up filters: the lists' plus the user's own.
+export async function refreshPopups() {
+  const lists = (await idb.kv.get('popupsLists')) || [];
+  const own = unpackCosmetic((await idb.get('lists', '__custom__') || {}).cosmetic);
+  const popups = [...lists, ...((own && own.pu) || [])];
+  await idb.kv.set('popups', popups);
+  setPopupFilters(popups);
 }
 
 export function invalidateCustomCosmetic() { custom = null; plans.clear(); }
@@ -104,8 +116,14 @@ function youtubeExtras(yt) {
     'ytd-video-renderer:has(a[href^="/shorts/"])', 'ytm-reel-shelf-renderer');
   if (yt.hideMerch) sels.push('ytd-merch-shelf-renderer', 'ytd-ticket-shelf-renderer', 'ytd-product-details-renderer');
   if (yt.hidePromos) sels.push('ytd-mealbar-promo-renderer', 'ytd-primetime-promo-renderer', 'ytd-brand-video-singleton-renderer',
-    'ytd-brand-video-shelf-renderer', 'tp-yt-paper-dialog:has(> ytd-mealbar-promo-renderer)', 'ytd-popup-container yt-mealbar-promo-renderer');
-  if (yt.hideEndCards) sels.push('.ytp-ce-element', '.ytp-endscreen-content', '.ytp-cards-teaser');
+    'ytd-brand-video-shelf-renderer', 'tp-yt-paper-dialog:has(> ytd-mealbar-promo-renderer)', 'ytd-popup-container yt-mealbar-promo-renderer',
+    'ytd-rich-item-renderer:has(.badge[aria-label="Premium"])', 'ytd-compact-movie-renderer', 'ytd-movie-renderer');
+  if (yt.hidePlayables) sels.push('ytd-rich-section-renderer:has(a[href^="/playables"])', 'ytd-rich-shelf-renderer[is-playables]',
+    'ytd-guide-entry-renderer:has(a[href^="/playables"])', 'ytd-mini-guide-entry-renderer:has(a[href^="/playables"])');
+  if (yt.hideMembersOnly) sels.push('ytd-rich-item-renderer:has(.badge-style-type-members-only)', 'ytd-rich-item-renderer:has(badge-shape.yt-badge-shape--membership)',
+    'ytd-video-renderer:has(.badge-style-type-members-only)', 'ytd-compact-video-renderer:has(.badge-style-type-members-only)',
+    'yt-lockup-view-model:has(badge-shape.yt-badge-shape--membership)', 'ytd-grid-video-renderer:has(.badge-style-type-members-only)');
+  if (yt.hideEndCards) sels.push('.ytp-ce-element', '.ytp-endscreen-content', '.ytp-cards-teaser', '.ytp-cards-button', '.ytp-suggested-action');
   return sels;
 }
 
@@ -120,9 +138,12 @@ const plans = new Map();
 export function clearPlans() { plans.clear(); }
 chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch.settings) plans.clear(); });
 
-async function planFor(host, s) {
-  const hit = plans.get(host);
-  if (hit) { plans.delete(host); plans.set(host, hit); return hit; }
+// `wide`: generic filters wanted on this page (off in lighter mode unless
+// the site is switched to full hiding).
+async function planFor(host, s, wide = true) {
+  const key = wide ? host : host + '|lite';
+  const hit = plans.get(key);
+  if (hit) { plans.delete(key); plans.set(key, hit); return hit; }
   const rec = await hostRecord(host);
   let plan;
   if (rec.f & 1) plan = { off: true };
@@ -131,7 +152,7 @@ async function planFor(host, s) {
     if (!(rec.f & 4)) for (const sel of rec.h) if (!rec.x.has(sel)) selectors.push(sel);
     const yt = isYouTubeHost(host);
     if (yt) selectors.push(...youtubeExtras(s.youtube));
-    const generic = !(rec.f & 2) && s.cosmetic.generic && !yt;
+    const generic = !(rec.f & 2) && wide && !yt;
     if (generic) {
       for (const sel of hgCss) if (!rec.x.has(sel)) selectors.push(sel);
       for (const sel of custom.hg || []) if (!rec.x.has(sel)) selectors.push(sel);
@@ -145,7 +166,7 @@ async function planFor(host, s) {
       proc: (rec.f & 4) ? [] : rec.p.filter(p => !rec.px.has(JSON.stringify(p)))
     };
   }
-  plans.set(host, plan);
+  plans.set(key, plan);
   if (plans.size > PLAN_CACHE_MAX) plans.delete(plans.keys().next().value);
   return plan;
 }
@@ -186,11 +207,17 @@ function frameState(tabId, frameId, doc, host, plan) {
   return st;
 }
 
+// The frame's host and whether generic filters apply, or null when no
+// hiding runs (paused, allow-listed, or "no cosmetic filtering" switched on
+// for the site in the address bar).
 async function activeFor(url, topUrl, s) {
   const host = rawHostOf(url);
   if (!s.enabled || !host) return null;
-  if (isWhitelisted(hostOf(topUrl || url) || hostOf(url), s)) return null;
-  return host;
+  const top = hostOf(topUrl || url) || hostOf(url);
+  if (isWhitelisted(top, s)) return null;
+  const sw = siteSwitches(top, s);
+  if (sw.noCosmetic) return null;
+  return { host, wide: s.cosmetic.generic !== false || !!sw.fullCosmetic };
 }
 
 // webNavigation.onCommitted: inject the frame's CSS as soon as the document
@@ -202,9 +229,10 @@ export async function prepareFrame(d) {
   if (d.frameId !== 0) {
     try { topUrl = (await chrome.tabs.get(d.tabId)).url || d.url; } catch { return; }
   }
-  const host = await activeFor(d.url, topUrl, s);
-  if (!host) { frames.delete(`${d.tabId}:${d.frameId}`); return; }
-  const plan = await planFor(host, s);
+  const act = await activeFor(d.url, topUrl, s);
+  if (!act) { frames.delete(`${d.tabId}:${d.frameId}`); return; }
+  const host = act.host;
+  const plan = await planFor(host, s, act.wide);
   if (plan.off) return;
   const st = frameState(d.tabId, d.frameId, d.documentId || null, host, plan);
   const target = d.documentId ? { tabId: d.tabId, documentIds: [d.documentId] } : { tabId: d.tabId, frameIds: [d.frameId] };
@@ -217,14 +245,15 @@ export async function frameInit(sender, msg) {
   if (!tab) return { on: false };
   const frameId = sender.frameId || 0;
   const s = await getSettings();
-  const host = await activeFor(msg.url, frameId === 0 ? msg.url : tab.url, s);
-  if (!host) return { on: false };
+  const act = await activeFor(msg.url, frameId === 0 ? msg.url : tab.url, s);
+  if (!act) return { on: false };
+  const host = act.host;
   let st = frames.get(`${tab.id}:${frameId}`);
   const sameDoc = st && st.host === host && (!st.doc || !sender.documentId || st.doc === sender.documentId);
   if (!sameDoc || !(await st.injected)) {
     // Not prepared at commit (worker was asleep, or the frame was
     // created without a navigation): inject now.
-    const plan = await planFor(host, s);
+    const plan = await planFor(host, s, act.wide);
     if (plan.off) return { on: false };
     st = frameState(tab.id, frameId, sender.documentId || null, host, plan);
     const target = sender.documentId ? { tabId: tab.id, documentIds: [sender.documentId] } : { tabId: tab.id, frameIds: [frameId] };
@@ -243,9 +272,10 @@ export async function genericTokens(sender, msg) {
   let st = frames.get(key);
   if (!st) {
     // Worker restarted since frame-init: rebuild from the host plan.
-    const host = rawHostOf(msg.url);
-    if (!host) return null;
-    st = frameState(sender.tab.id, sender.frameId || 0, sender.documentId || null, host, await planFor(host, await getSettings()));
+    const s = await getSettings();
+    const act = await activeFor(msg.url, sender.frameId ? sender.tab.url : msg.url, s);
+    if (!act) return null;
+    st = frameState(sender.tab.id, sender.frameId || 0, sender.documentId || null, act.host, await planFor(act.host, s, act.wide));
   }
   if (!st.plan.generic) return null;
   const lookup = [];

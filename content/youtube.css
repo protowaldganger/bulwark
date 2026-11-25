@@ -33,6 +33,11 @@ ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"],
 .ytp-ad-image-overlay,
 .ytp-ad-text-overlay,
 
+/* YouTube notification toasts, which carry "Experiencing interruptions?"
+   (the same rule uBlock Origin uses; it also hides small confirmations
+   such as "Saved to Watch later") */
+tp-yt-paper-toast#toast:has(> #text-container > yt-formatted-string#text.yt-notification-action-renderer),
+
 /* Anti-adblock enforcement dialog */
 ytd-enforcement-message-view-model,
 tp-yt-paper-dialog:has(> ytd-enforcement-message-view-model),

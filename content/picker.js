@@ -1,6 +1,8 @@
 // Element picker. Injected on demand (never preloaded).
 // Mode "hover": point at an element and click it.
 // Mode "target": start from the element under the last right click.
+// Mode "zap": click elements to remove them from this page only; nothing
+// is saved (a reload brings them back).
 (() => {
   'use strict';
   const bw = window.__bw || (window.__bw = {});
@@ -53,13 +55,26 @@
     <button class="primary" data-a="block">Block</button>
   </div>
 </div>`;
+  const zap = mode === 'zap';
+  if (zap) {
+    root.querySelector('.panel').setAttribute('aria-label', 'Remove element');
+    root.querySelector('.panel').innerHTML = `
+  <div class="row"><div class="title">Remove element</div><button class="ghost" data-a="close" aria-label="Close">Esc</button></div>
+  <div class="hint">Click anything on the page to remove it. Only this page changes, and a reload brings it all back.</div>
+  <div class="row actions">
+    <span class="count">Nothing removed yet</span>
+    <span class="spacer"></span>
+    <button data-a="undo">Undo</button>
+    <button class="primary" data-a="close">Done</button>
+  </div>`;
+  }
   document.documentElement.appendChild(host);
 
   const hl = root.querySelector('.hl');
   const panel = root.querySelector('.panel');
-  const ta = root.querySelector('textarea');
+  const ta = root.querySelector('textarea') || document.createElement('textarea');
   const count = root.querySelector('.count');
-  let picking = mode === 'hover';
+  let picking = mode === 'hover' || zap;
   let current = null;
   const trail = [];
 
@@ -127,10 +142,31 @@
     const el = document.elementFromPoint(e.clientX, e.clientY);
     host.style.display = '';
     if (!el || isOurs(el)) return;
+    if (zap) { zapOne(el); return; }
     picking = false;
     trail.length = 0;
     select(el);
   }
+  // Zapper: remove, remember for undo, and give back scrolling that an
+  // overlay had locked.
+  const removed = [];
+  function zapOne(el) {
+    if (el === document.body || el === document.documentElement) return;
+    removed.push({ el, parent: el.parentNode, next: el.nextSibling });
+    el.remove();
+    show(null);
+    for (const n of [document.documentElement, document.body]) {
+      if (n && getComputedStyle(n).overflowY === 'hidden') { n.style.setProperty('overflow', 'auto', 'important'); n.style.setProperty('overflow-y', 'auto', 'important'); }
+    }
+    count.textContent = removed.length === 1 ? '1 element removed' : `${removed.length} elements removed`;
+  }
+  function undo() {
+    const r = removed.pop();
+    if (!r) return;
+    try { r.parent.insertBefore(r.el, r.next && r.next.parentNode === r.parent ? r.next : null); } catch { /* gone */ }
+    count.textContent = removed.length ? (removed.length === 1 ? '1 element removed' : `${removed.length} elements removed`) : 'Nothing removed yet';
+  }
+
   function close() {
     window.removeEventListener('mousemove', onMove, true);
     window.removeEventListener('click', onClick, true);
@@ -152,6 +188,7 @@
     const a = e.target.closest('button') && e.target.closest('button').dataset.a;
     if (!a) return;
     if (a === 'close') return close();
+    if (a === 'undo') return undo();
     if (a === 'pick') { picking = true; show(null); return; }
     if (a === 'wider' && current && current.parentElement && current.parentElement !== document.body) {
       trail.push(current); select(current.parentElement); return;

@@ -96,7 +96,7 @@ test('web accessible resources use dynamic URLs and the CSP limits connections',
 });
 
 test('install enables every bundled ruleset and the YouTube ruleset', async () => {
-  const want = chrome.runtime.getManifest().declarative_net_request.rule_resources.map(r => r.id);
+  const want = chrome.runtime.getManifest().declarative_net_request.rule_resources.filter(r => r.enabled).map(r => r.id);
   assert.deepEqual((await chrome.declarativeNetRequest.getEnabledRulesets()).sort(), want.sort());
 });
 
@@ -291,68 +291,59 @@ test('YouTube settings drive registrations and the ping ruleset', async () => {
   assert.ok(reg.some(r => r.id === 'bw-yt-main'));
 });
 
-test('YouTube page loads are redirected to the ad-free variant, once', async () => {
-  const rules = env.dynamicRules();
-  const allow = rules.find(r => r.id === 3), redirect = rules.find(r => r.id === 4);
-  assert.ok(allow && redirect, 'ad-free rules installed by default');
-  assert.ok(allow.priority > redirect.priority);
-  const reg = (await chrome.scripting.getRegisteredContentScripts()).find(r => r.id === 'bw-yt-main');
-  assert.deepEqual(reg.js, ['content/youtube-flag-0.js', 'content/youtube-main.js']);
-  // Same semantics as Chrome's matcher for these simple patterns.
-  const kv = redirect.action.redirect.transform.queryTransform.addOrReplaceParams;
-  assert.deepEqual(kv, [{ key: 'pp', value: 'YAF4AaIGAS4' }]);
-  const go = (url) => {
-    const [a, r] = [env.dynamicRules().find(x => x.id === 3), env.dynamicRules().find(x => x.id === 4)];
-    if (!r || new RegExp(a.condition.regexFilter, 'i').test(url)) return url;
-    if (!new RegExp(r.condition.regexFilter, 'i').test(url)) return url;
-    const u = new URL(url);
-    const q = u.search.slice(1).split('&').filter(x => x && !x.startsWith('pp='));
-    q.push('pp=' + r.action.redirect.transform.queryTransform.addOrReplaceParams[0].value);
-    u.search = '?' + q.join('&');
-    return u.href;
-  };
-  const once = go('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
-  assert.equal(once, 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&pp=YAF4AaIGAS4');
-  assert.equal(go(once), once, 'no redirect loop');
-  assert.equal(go('https://www.youtube.com/watch?v=x&pp=ygUFbXVzaWM%3D&t=4'), 'https://www.youtube.com/watch?v=x&t=4&pp=YAF4AaIGAS4', 'a tracking pp is replaced');
-  assert.equal(go('https://www.youtube.com/watch?v=x&app=desktop'), 'https://www.youtube.com/watch?v=x&app=desktop&pp=YAF4AaIGAS4', 'app= is not pp=');
-  assert.equal(go('https://www.youtube.com/shorts/abc'), 'https://www.youtube.com/shorts/abc');
-  assert.equal(go('https://www.youtube.com/embed/abc'), 'https://www.youtube.com/embed/abc');
-  assert.deepEqual(redirect.condition.resourceTypes, ['main_frame']);
-
-  // A YouTube page reports that the method fails: new pages start at the next.
+test('YouTube ad-free method: dropped after three failures, never a page-address rewrite', async () => {
+  const pageRules = () => env.dynamicRules().filter(r => r.id === 3 || r.id === 4 || /youtube\.com\/watch/.test(r.condition.regexFilter || ''));
+  const flagOf = async () => (await chrome.scripting.getRegisteredContentScripts()).find(r => r.id === 'bw-yt-main').js;
+  assert.equal((await msg({ t: 'options' })).env.ytMethod, 0);
+  assert.deepEqual(await flagOf(), ['content/youtube-flag-0.js', 'content/youtube-main.js']);
   const ytSender = contentSender(tabYt, tabYt.url);
   await msg({ t: 'yt-adfree-method', m: 1 }, ytSender);
-  assert.equal(go('https://www.youtube.com/watch?v=dQw4w9WgXcQ'), 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&pp=eAFgAQ');
-  assert.deepEqual((await chrome.scripting.getRegisteredContentScripts()).find(r => r.id === 'bw-yt-main').js, ['content/youtube-flag-1.js', 'content/youtube-main.js']);
-  assert.equal((await msg({ t: 'options' })).env.ytMethod, 1);
-  await msg({ t: 'yt-adfree-method', m: 0 }, ytSender); // never moves back
-  await msg({ t: 'yt-adfree-method', m: 99 }, ytSender); // out of range
-  assert.equal((await msg({ t: 'options' })).env.ytMethod, 1);
+  await msg({ t: 'yt-adfree-method', m: 1 }, ytSender);
+  assert.deepEqual(await flagOf(), ['content/youtube-flag-0.js', 'content/youtube-main.js'], 'two failures can be flukes');
   // Only YouTube pages may report.
   const other = { id: 7, url: 'https://evil.test/' };
-  await msg({ t: 'yt-adfree-method', m: 2 }, contentSender(other, other.url));
-  assert.equal((await msg({ t: 'options' })).env.ytMethod, 1);
-  // Later methods have no page-load form: no redirect, player requests only.
-  await msg({ t: 'yt-adfree-method', m: 2 }, ytSender);
-  assert.ok(!env.dynamicRules().some(r => r.id === 3 || r.id === 4));
-  assert.deepEqual((await chrome.scripting.getRegisteredContentScripts()).find(r => r.id === 'bw-yt-main').js, ['content/youtube-flag-2.js', 'content/youtube-main.js']);
-  // None left: ads are just removed.
-  await msg({ t: 'yt-adfree-method', m: 6 }, ytSender);
-  assert.deepEqual((await chrome.scripting.getRegisteredContentScripts()).find(r => r.id === 'bw-yt-main').js, ['content/youtube-main.js']);
-
-  // Off with the setting; switching it back on starts from method 1 again.
+  await msg({ t: 'yt-adfree-method', m: 1 }, contentSender(other, other.url));
+  assert.equal((await msg({ t: 'options' })).env.ytMethod, 0);
+  await msg({ t: 'yt-adfree-method', m: 99 }, ytSender); // out of range
+  await msg({ t: 'yt-adfree-method', m: 1 }, ytSender);
+  assert.deepEqual(await flagOf(), ['content/youtube-flag-1.js', 'content/youtube-main.js'], 'a third one moves on to the next form');
+  for (let i = 0; i < 3; i++) await msg({ t: 'yt-adfree-method', m: 3 }, ytSender);
+  assert.deepEqual(await flagOf(), ['content/youtube-main.js'], 'none left: ads are just removed');
+  assert.deepEqual(pageRules(), [], 'watch pages are never redirected');
+  // Off with the setting; switching it back on starts again.
   await msg({ t: 'save-settings', patch: { youtube: { adFree: false } } });
-  assert.ok(!env.dynamicRules().some(r => r.id === 3 || r.id === 4));
-  assert.deepEqual((await chrome.scripting.getRegisteredContentScripts()).find(r => r.id === 'bw-yt-main').js, ['content/youtube-main.js']);
+  assert.deepEqual(await flagOf(), ['content/youtube-main.js']);
   await msg({ t: 'save-settings', patch: { youtube: { adFree: true } } });
   assert.equal((await msg({ t: 'options' })).env.ytMethod, 0);
-  assert.equal(go('https://www.youtube.com/watch?v=a'), 'https://www.youtube.com/watch?v=a&pp=YAF4AaIGAS4');
-  // Off on a whitelisted YouTube.
-  await msg({ t: 'set-site-enabled', host: 'youtube.com', enabled: false }, popupSender);
-  assert.ok(!env.dynamicRules().some(r => r.id === 4));
-  await msg({ t: 'set-site-enabled', host: 'youtube.com', enabled: true }, popupSender);
-  assert.ok(env.dynamicRules().some(r => r.id === 4));
+  assert.deepEqual(await flagOf(), ['content/youtube-flag-0.js', 'content/youtube-main.js']);
+});
+
+test('Brave: YouTube video ads are left to Shields (no MAIN-world YouTube script)', async () => {
+  const ids = async () => (await chrome.scripting.getRegisteredContentScripts()).map(r => r.id);
+  assert.ok((await ids()).includes('bw-yt-main'));
+  Object.defineProperty(navigator, 'brave', { value: { isBrave: () => Promise.resolve(true) }, configurable: true });
+  try {
+    await msg({ t: 'save-settings', patch: { youtube: { hideMerch: false } } });
+    const now = await ids();
+    assert.ok(!now.includes('bw-yt-main'), 'player hooks not registered in Brave');
+    assert.ok(now.includes('bw-yt-iso'), 'cookie prompt, notices and page hiding stay');
+    assert.ok(now.includes('bw-yt-brave'), 'the oaeb marker for Shields is registered');
+    await msg({ t: 'save-settings', patch: { youtube: { adFree: false } } });
+    assert.ok(!(await ids()).includes('bw-yt-brave'), 'and follows Ask for ad-free playback');
+    await msg({ t: 'save-settings', patch: { youtube: { adFree: true } } });
+  } finally {
+    delete navigator.brave;
+    await msg({ t: 'save-settings', patch: { youtube: { hideMerch: true } } });
+  }
+  assert.ok((await ids()).includes('bw-yt-main'));
+});
+
+test('YouTube cookie prompt: answered at most once a minute per tab, YouTube pages only', async () => {
+  const ytSender = contentSender(tabYt, tabYt.url);
+  assert.equal((await msg({ t: 'yt-consent' }, ytSender)).ok, true);
+  assert.equal((await msg({ t: 'yt-consent' }, ytSender)).ok, false, 'not again right away');
+  const other = { id: 8, url: 'https://evil.test/' };
+  assert.equal((await msg({ t: 'yt-consent' }, contentSender(other, other.url))).ok, false);
 });
 
 test('SponsorBlock: off under strict privacy, hash-prefix lookups when allowed', async () => {
@@ -426,4 +417,157 @@ test('pausing everywhere adds a global allow rule and grey icons', async () => {
   assert.ok(log.icons.some(i => i.imageData && i.imageData[16].width === 16), 'faded icon drawn at runtime');
   await msg({ t: 'set-global', enabled: true }, popupSender);
   assert.ok(!env.dynamicRules().some(r => r.id === 2));
+});
+
+test('Global Privacy Control: header rule and navigator flag, switchable', async () => {
+  const gpc = () => env.dynamicRules().find(r => r.id === 5);
+  assert.deepEqual(gpc().action.requestHeaders, [{ header: 'Sec-GPC', operation: 'set', value: '1' }]);
+  assert.ok(gpc().condition.resourceTypes.includes('main_frame'));
+  assert.ok(gpc().priority > 1000, 'sent on allow-listed sites too');
+  let reg = await chrome.scripting.getRegisteredContentScripts();
+  assert.equal(reg.find(r => r.id === 'bw-gpc').world, 'MAIN');
+  await msg({ t: 'save-settings', patch: { privacy: { gpc: false } } });
+  assert.equal(gpc(), undefined);
+  reg = await chrome.scripting.getRegisteredContentScripts();
+  assert.ok(!reg.some(r => r.id === 'bw-gpc'));
+  await msg({ t: 'save-settings', patch: { privacy: { gpc: true } } });
+  assert.ok(gpc());
+});
+
+test('pop-ups matching a $popup filter are closed, others are left alone', async () => {
+  tabs.set(20, { id: 20, url: 'https://news.test/story' });
+  const open = async (tabId, url) => {
+    tabs.set(tabId, { id: tabId, url });
+    await Promise.all(chrome.webNavigation.onCreatedNavigationTarget.fire({ sourceTabId: 20, sourceFrameId: 0, tabId, url }));
+    await sleep(30);
+  };
+  log.removedTabs.length = 0;
+  // A popup filter from EasyList.
+  const easylistPopup = fs.readFileSync(path.join(CACHE, 'easylist.txt'), 'utf8').split('\n').find(l => /^\|\|[a-z0-9.-]+\^\$popup$/.test(l));
+  const host = easylistPopup.slice(2, easylistPopup.indexOf('^'));
+  await open(21, `https://${host}/landing`);
+  assert.deepEqual(log.removedTabs, [21]);
+  await open(22, 'https://www.wikipedia.org/');
+  assert.deepEqual(log.removedTabs, [21]);
+  // about:blank first, address set afterwards.
+  await open(23, 'about:blank');
+  await Promise.all(chrome.webNavigation.onBeforeNavigate.fire({ tabId: 23, frameId: 0, url: `https://${host}/x` }));
+  await sleep(30);
+  assert.deepEqual(log.removedTabs, [21, 23]);
+  // User's own $popup filter.
+  await msg({ t: 'save-custom-filters', text: '||my-popups.example^$popup' });
+  await open(24, 'https://my-popups.example/');
+  assert.deepEqual(log.removedTabs, [21, 23, 24]);
+  await msg({ t: 'save-custom-filters', text: '' });
+});
+
+test('tracking-link skip page gets the real destination', async () => {
+  const sender = { id: chrome.runtime.id, url: env.BASE + 'skip/skip.html?s=%3Furl', tab: { id: 30, url: env.BASE + 'skip/skip.html?s=%3Furl' }, frameId: 0 };
+  await Promise.all(chrome.webNavigation.onBeforeNavigate.fire({ tabId: 30, frameId: 0, url: 'https://t.example/r?url=https%3A%2F%2Fdest.example%2Fpage' }));
+  assert.deepEqual(await msg({ t: 'skip-target', s: '?url' }, sender), { url: 'https://dest.example/page' });
+  // Web pages cannot ask.
+  await assert.rejects(msg({ t: 'skip-target', s: '?url' }, contentSender({ id: 31, url: 'https://evil.test/' }, 'https://evil.test/')), /Not allowed/);
+});
+
+test('consent cookies set by the cookie-notice list survive cleanup', async () => {
+  const fire = (cookie) => Promise.all(chrome.cookies.onChanged.fire({ removed: false, cookie, cause: 'explicit' }));
+  const c = { name: 'tracking-opt-in-status', domain: '.fandom.com', path: '/', secure: true, session: false, storeId: '0' };
+  log.removedCookies.length = 0;
+  await fire(c);
+  assert.deepEqual(log.removedCookies.map(x => x.name), ['tracking-opt-in-status'], 'removed while the list is off');
+  await msg({ t: 'save-settings', patch: { lists: { 'cookie-notices': true } } });
+  log.removedCookies.length = 0;
+  await fire(c);
+  await fire({ ...c, name: '_ga' });
+  assert.deepEqual(log.removedCookies.map(x => x.name), ['_ga']);
+  const reg = await chrome.scripting.getRegisteredContentScripts();
+  assert.ok(reg.some(r => r.id === 'bw-sl-cookie-notices'));
+  await msg({ t: 'save-settings', patch: { lists: { 'cookie-notices': false } } });
+});
+
+test('dangerous sites: warning page, open once in this tab, or always', async () => {
+  const E = chrome.declarativeNetRequest._evaluate;
+  // A host from URLhaus, which is on by default.
+  const bad = JSON.parse(fs.readFileSync(path.join(ROOT, 'rulesets/urlhaus.json'), 'utf8')).find(r => r.condition.requestDomains).condition.requestDomains[0];
+  const url = `http://${bad}/payload`;
+  const page = E({ url, type: 'main_frame', tabId: 40 });
+  assert.equal(page.action, 'redirect');
+  assert.equal(page.rule.action.redirect.extensionPath, '/blocked/blocked.html', JSON.stringify(page.rule) + ' ' + page.ruleset);
+  assert.equal(E({ url, type: 'script', initiator: 'https://site.test', tabId: 40 }).action, 'block');
+  // The warning page asks what was blocked.
+  tabs.set(40, { id: 40, url: env.BASE + 'blocked/blocked.html' });
+  await Promise.all(chrome.webNavigation.onBeforeNavigate.fire({ tabId: 40, frameId: 0, url }));
+  const pageSender = { id: chrome.runtime.id, url: env.BASE + 'blocked/blocked.html', tab: { id: 40, url: env.BASE + 'blocked/blocked.html' }, frameId: 0 };
+  assert.deepEqual(await msg({ t: 'blocked-info' }, pageSender), { url, host: bad });
+  // Open anyway, this tab only.
+  assert.deepEqual(await msg({ t: 'blocked-proceed', url, always: false }, pageSender), { ok: true });
+  assert.equal(E({ url, type: 'main_frame', tabId: 40 }).action, 'allow');
+  assert.equal(E({ url, type: 'main_frame', tabId: 41 }).action, 'redirect', 'other tabs still warn');
+  // Don't warn again: a lasting allow rule, listed in settings.
+  assert.deepEqual(await msg({ t: 'blocked-proceed', url, always: true }, pageSender), { ok: true });
+  const s = await msg({ t: 'get-settings' }).catch(() => null) || (await chrome.storage.local.get('settings')).settings;
+  assert.ok(s.strictAllow.includes(bad));
+  assert.equal(E({ url, type: 'main_frame', tabId: 41 }).action, 'allow');
+  await msg({ t: 'save-settings', patch: { strictAllow: [] } });
+  assert.equal(E({ url, type: 'main_frame', tabId: 41 }).action, 'redirect');
+  // Web pages cannot ask for it.
+  await assert.rejects(msg({ t: 'blocked-proceed', url, always: true }, contentSender({ id: 42, url: 'https://evil.test/' }, 'https://evil.test/')), /Not allowed/);
+  chrome.tabs.onRemoved.fire(40);
+  await sleep(10);
+  assert.equal(E({ url, type: 'main_frame', tabId: 40 }).action, 'redirect', 'closing the tab ends "open anyway"');
+});
+
+test('site switches: fonts, media, JavaScript, pop-ups and hiding', async () => {
+  const E = chrome.declarativeNetRequest._evaluate;
+  const host = 'switch.example';
+  const on = (key, v = true) => msg({ t: 'set-site-switch', host: 'www.' + host, key, on: v }, popupSender);
+  await on('noFonts'); await on('noMedia'); await on('noScripts');
+  const from = { initiator: 'https://www.' + host, tabId: 50 };
+  assert.equal(E({ url: 'https://fonts.cdn.test/a.woff2', type: 'font', ...from }).action, 'block');
+  assert.equal(E({ url: 'https://video.cdn.test/a.mp4', type: 'media', ...from }).action, 'block');
+  assert.equal(E({ url: 'https://code.cdn.test/a.js', type: 'script', ...from }).action, 'block');
+  assert.equal(E({ url: 'https://code.cdn.test/a.js', type: 'script', initiator: 'https://other.test', tabId: 51 }).action, 'none', 'other sites unaffected');
+  const csp = env.dynamicRules().find(r => r.action.type === 'modifyHeaders' && r.condition.requestDomains && r.condition.requestDomains.includes(host));
+  assert.equal(csp.action.responseHeaders[0].value, "script-src 'none'");
+  // No hiding: the content script gets nothing.
+  await on('noCosmetic');
+  const t = { id: 52, url: `https://www.${host}/` };
+  tabs.set(52, t);
+  assert.equal((await msg({ t: 'frame-init', url: t.url }, contentSender(t, t.url))).on, false);
+  await on('noCosmetic', false);
+  assert.equal((await msg({ t: 'frame-init', url: t.url }, contentSender(t, t.url))).on, true);
+  // Lighter mode skips generic hiding unless the site asks for full hiding.
+  await msg({ t: 'save-settings', patch: { cosmetic: { generic: false } } });
+  assert.equal((await msg({ t: 'frame-init', url: t.url }, contentSender({ ...t, id: 53 }, t.url))).generic, false);
+  await on('fullCosmetic');
+  assert.equal((await msg({ t: 'frame-init', url: t.url }, contentSender({ ...t, id: 54 }, t.url))).generic, true);
+  await msg({ t: 'save-settings', patch: { cosmetic: { generic: true } } });
+  // No pop-ups closes any new tab the site opens.
+  await on('noPopups');
+  log.removedTabs.length = 0;
+  tabs.set(55, { id: 55, url: `https://www.${host}/page` });
+  tabs.set(56, { id: 56, url: 'https://www.wikipedia.org/' });
+  await Promise.all(chrome.webNavigation.onCreatedNavigationTarget.fire({ sourceTabId: 55, sourceFrameId: 0, tabId: 56, url: 'https://www.wikipedia.org/' }));
+  await sleep(30);
+  assert.deepEqual(log.removedTabs, [56]);
+  // The popup shows the switches; clearing them removes the rules.
+  const st = await msg({ t: 'popup', tabId: 55 }, popupSender);
+  assert.equal(st.switches.noPopups, true);
+  await msg({ t: 'save-settings', patch: { sites: {} } });
+  assert.equal(E({ url: 'https://fonts.cdn.test/a.woff2', type: 'font', ...from }).action, 'none');
+});
+
+test('request log: matched rules per tab, pop-ups too, cleared with the tab', async () => {
+  chrome.declarativeNetRequest.onRuleMatchedDebug.fire({ request: { tabId: 60, url: 'https://ads.test/x.js', type: 'script', frameId: 0, method: 'get' }, rule: { rulesetId: 'easylist', ruleId: 5 } });
+  chrome.declarativeNetRequest.onRuleMatchedDebug.fire({ request: { tabId: 61, url: 'https://other.test/y.js', type: 'script', frameId: 0, method: 'get' }, rule: { rulesetId: 'easylist', ruleId: 6 } });
+  const res = await msg({ t: 'log-get', tabId: 60, since: 0 });
+  assert.equal(res.available, true);
+  assert.equal(res.entries.filter(e => e.url === 'https://ads.test/x.js').length, 1);
+  assert.ok(!res.entries.some(e => e.url === 'https://other.test/y.js'), 'per tab');
+  const more = await msg({ t: 'log-get', tabId: 60, since: res.last });
+  assert.equal(more.entries.length, 0, 'only new entries after the cursor');
+  await msg({ t: 'log-clear', tabId: 60 });
+  assert.equal((await msg({ t: 'log-get', tabId: 60, since: 0 })).entries.length, 0);
+  // Content scripts cannot read it.
+  await assert.rejects(msg({ t: 'log-get', tabId: 61 }, contentSender({ id: 61, url: 'https://evil.test/' }, 'https://evil.test/')), /Not allowed/);
 });

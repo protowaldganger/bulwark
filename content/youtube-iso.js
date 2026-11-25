@@ -40,6 +40,7 @@
     counters.pruned += p; counters.cost += c; counters.samples += n;
     bump();
   };
+  let mainChannel = '';
   (() => {
     const de = document.documentElement;
     if (!de) return;
@@ -47,6 +48,7 @@
       const name = de.getAttribute('data-bwy');
       if (!name) return false;
       de.removeAttribute('data-bwy');
+      mainChannel = name;
       document.addEventListener(name, onStats, true);
       return true;
     };
@@ -67,6 +69,15 @@
     });
   } catch { /* ignore */ }
   const sbOn = () => cfg.sponsorblock && !cfg.strict;
+  // In Brave, Shields handles YouTube video ads; rushing an ad on top of
+  // that ends in "Something went wrong", so the skipper stays out of it.
+  const brave = (() => {
+    try {
+      if (navigator.brave) return true;
+      const b = navigator.userAgentData && navigator.userAgentData.brands;
+      return Array.isArray(b) && b.some(x => /brave/i.test(x && x.brand));
+    } catch { return false; }
+  })();
 
   // ------------------------------------------------------------ ad skipper
   const players = document.getElementsByClassName('html5-video-player');
@@ -81,7 +92,7 @@
   }
 
   function handlePlayer(p) {
-    if (!cfg.skipper) return;
+    if (!cfg.skipper || brave) return;
     const video = p.querySelector('video');
     if (!video) return;
     if (isAdShowing(p)) {
@@ -93,12 +104,9 @@
       if (btn) { try { btn.click(); } catch { /* ignore */ } }
       if (!video.muted) video.muted = true;
       try { if (video.playbackRate !== 16) video.playbackRate = 16; } catch { /* ignore */ }
-      const d = video.duration;
-      // Client-side ads are short standalone streams; stitched ads report
-      // the full content duration, so never jump to the end of those.
-      if (isFinite(d) && d > 0 && d <= 120 && video.currentTime < d - 0.25) {
-        try { video.currentTime = d - 0.1; } catch { /* ignore */ }
-      }
+      // No jumping inside the ad: YouTube now treats a jump as tampering
+      // and stops with "Something went wrong" (error 282054944, seen live on
+      // 24 November 2026). Playing it muted at 16x takes a second or two.
     } else if (saved.has(video)) {
       const s = saved.get(video);
       saved.delete(video);
@@ -113,7 +121,23 @@
     new MutationObserver(() => handlePlayer(p)).observe(p, { attributes: true, attributeFilter: ['class'] });
     handlePlayer(p);
     const v = p.querySelector('video');
-    if (v) v.addEventListener('timeupdate', onTime, { passive: true });
+    if (v) {
+      v.addEventListener('timeupdate', onTime, { passive: true });
+      v.addEventListener('playing', () => refocus(p), { passive: true });
+    }
+  }
+
+  // Keyboard shortcuts (space, k, arrows) only work while the player or
+  // the page has focus. If focus sits on nothing visible (a pop-up that is
+  // hidden, or was removed, still holding it), keys go nowhere until the
+  // player is clicked. When a video starts, focus goes back to the player,
+  // as YouTube does itself on a normal page load. Never taken from
+  // anything visible, such as the search box or a comment field.
+  function refocus(p) {
+    if (p.id !== 'movie_player' || location.pathname !== '/watch' || !document.hasFocus()) return;
+    const a = document.activeElement;
+    if (a && a !== document.body && a !== document.documentElement && a.getClientRects().length) return;
+    try { p.focus({ preventScroll: true }); } catch { /* ignore */ }
   }
 
   // ------------------------------------------------- anti-adblock dialog
@@ -188,6 +212,58 @@
     setTimeout(() => host.remove(), 4000);
   }
 
+  // ------------------------------------------------- "Fix this video"
+  // From the popup: the MAIN-world script leaves this page alone from now
+  // on and loads the video again. Answers false when it is not there, so
+  // the service worker reloads the tab instead.
+  try {
+    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+      if (!msg || msg.t !== 'yt-fix' || window.top !== window) return false;
+      if (!mainChannel) { sendResponse({ ok: false }); return false; }
+      try { document.dispatchEvent(new CustomEvent(mainChannel + 'f')); } catch { /* ignore */ }
+      sendResponse({ ok: true, video: location.pathname === '/watch' });
+      return false;
+    });
+  } catch { /* ignore */ }
+
+  // ------------------------------------- "Experiencing interruptions?"
+  // YouTube moved this notice from a toast to a snackbar (late 2026), so the
+  // stylesheet rule no longer catches it. Matched by its text, so other
+  // notices ("Saved to Watch later") stay.
+  const INTERRUPTIONS = /experiencing interruptions\?|upplever du störningar\?/i;
+  const snackbars = document.getElementsByTagName('snackbar-view-model');
+  function hideInterruptions() {
+    for (let i = 0; i < snackbars.length; i++) {
+      const el = snackbars[i];
+      if (el.style.display !== 'none' && INTERRUPTIONS.test(el.textContent || '')) el.style.setProperty('display', 'none', 'important');
+    }
+  }
+
+  // ------------------------------------------------ cookie consent prompt
+  // "Before you continue to YouTube" comes back on every visit when the
+  // answer is not stored. Bulwark answers it the way you would: Reject all.
+  // Only a button whose label is exactly "Reject all" (in a few languages)
+  // is ever clicked, at most once a minute per tab (the service worker
+  // keeps count), so a page that reloads after the answer cannot loop.
+  const REJECT = /^(reject all|avvisa alla|alle ablehnen|tout refuser|rechazar todo|rifiuta tutto|alles afwijzen|afvis alle|avvis alle|hylkää kaikki|odrzuć wszystko|rejeitar tudo)$/i;
+  let consentDone = false;
+  function answerConsent() {
+    if (consentDone || window.top !== window) return;
+    const scope = location.hostname === 'consent.youtube.com' ? document : document.querySelector('ytd-consent-bump-v2-lightbox, tp-yt-paper-dialog:has(ytd-consent-bump-v2-lightbox)');
+    if (!scope) return;
+    let target = null;
+    for (const b of scope.querySelectorAll('button, [role="button"]')) {
+      const text = (b.textContent || '').replace(/\s+/g, ' ').trim();
+      const aria = (b.getAttribute('aria-label') || '').trim();
+      if ((REJECT.test(text) || REJECT.test(aria)) && b.getClientRects().length) { target = b; break; }
+    }
+    if (!target) return;
+    consentDone = true;
+    try {
+      chrome.runtime.sendMessage({ t: 'yt-consent' }).then((r) => { if (r && r.ok) target.click(); }).catch(() => {});
+    } catch { /* extension reloaded */ }
+  }
+
   // ------------------------------------------------------------- driver
   let seen = 0;
   function tick() {
@@ -195,7 +271,11 @@
       seen = players.length;
       for (let i = 0; i < players.length; i++) attach(players[i]);
     }
+    // Ads arrive at playing speed, so keep moving through one as it loads.
+    for (let i = 0; i < players.length; i++) if (isAdShowing(players[i])) handlePlayer(players[i]);
     if (dialogs.length) clearEnforcement();
+    if (snackbars.length) hideInterruptions();
+    if (!consentDone) answerConsent();
     if (location.href !== lastHref) { lastHref = location.href; refreshSegments(); }
   }
 

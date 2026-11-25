@@ -68,7 +68,7 @@ export async function updateOne(def, force) {
     return { id: def.id, unchanged: true };
   }
   const t0 = performance.now();
-  const compiled = compileList(text, { badfilters: await allBadfilters(def.id) });
+  const compiled = compileList(text, { badfilters: await allBadfilters(def.id), trusted: !!def.trusted, strict: !!def.strict, hostsOnly: !!def.hostsOnly });
   const compileMs = Math.round(performance.now() - t0);
   // Tamper and truncation guard: refuse an update that suddenly loses most
   // of a bundled list, instead of silently weakening protection.

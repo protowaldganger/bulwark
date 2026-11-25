@@ -37,6 +37,7 @@ export function ruleMatches(rule, req) {
   if (c.resourceTypes) { if (!c.resourceTypes.includes(type)) return false; }
   else if (c.excludedResourceTypes) { if (c.excludedResourceTypes.includes(type)) return false; }
   else if (type === 'main_frame') return false;
+  if (c.tabIds && !c.tabIds.includes(req.tabId)) return false;
   const url = req.url;
   if (c.urlFilter) {
     let re = reCache.get(rule);

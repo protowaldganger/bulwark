@@ -10,6 +10,46 @@
 import { keepCookie } from '../engine/cookies.js';
 import { getSettings, cookiePolicyFor, hostChain, report, siteOf, rawHostOf } from './state.js';
 import { countCookie } from './stats.js';
+import { LISTS } from '../engine/lists.js';
+import { hostKeys } from '../engine/compiler.js';
+import { bundledScriptletTable, loadOverlay } from './scripts.js';
+
+// Consent cookies: the cookie-notice lists answer banners by setting a
+// "rejected" or "necessary only" cookie (set-cookie scriptlets). Those
+// cookies must survive the cleanup below, or the banner comes back on
+// every visit.
+const SET_COOKIE = /^(trusted-)?set-cookie(-reload)?$/;
+let consent = null, consentKey = '', consentAt = 0;
+
+async function consentMap(s) {
+  const ids = LISTS.filter(l => l.bundled && s.lists[l.id]).map(l => l.id);
+  const key = ids.join(',');
+  // Rebuilt when the lists change, and now and then for list updates.
+  if (consent && consentKey === key && Date.now() - consentAt < 600000) return consent;
+  const map = new Map();
+  const add = (table) => {
+    for (const [host, entries] of Object.entries(table || {})) {
+      for (const e of entries || []) {
+        if (!Array.isArray(e) || !SET_COOKIE.test(e[0]) || !e[1]) continue;
+        (map.get(host) || map.set(host, new Set()).get(host)).add(String(e[1]).toLowerCase());
+      }
+    }
+  };
+  for (const id of ids) add(await bundledScriptletTable(id));
+  try { add(await loadOverlay()); } catch { /* ignore */ }
+  consent = map; consentKey = key; consentAt = Date.now();
+  return map;
+}
+
+async function keepRuleFor(domain, s) {
+  const user = userRuleFor(domain, s);
+  const map = await consentMap(s);
+  const names = [];
+  for (const k of hostKeys(domain)) { const n = map.get(k); if (n) names.push(...n); }
+  if (!names.length) return user;
+  const set = new Set(names);
+  return (name) => set.has(String(name).toLowerCase()) || (user ? user(name) : false);
+}
 
 function userRuleFor(domain, settings) {
   const rules = settings.cookies.rules || [];
@@ -49,7 +89,7 @@ export async function onCookieChanged(info) {
   const thirdParty = !!top && siteOf(top) !== siteOf(domain);
   const keep = thirdParty && s.cookies.blockThirdParty && policy !== 'allow'
     ? false
-    : keepCookie({ name: c.name, session: c.session }, policy, userRuleFor(domain, s), domain);
+    : keepCookie({ name: c.name, session: c.session, httpOnly: c.httpOnly }, policy, await keepRuleFor(domain, s), domain);
   if (keep) return;
   await removeCookie(c);
   countCookie(domain, 1);
@@ -64,7 +104,7 @@ export async function sweepSite(host) {
   for (const c of all) {
     const domain = c.domain.replace(/^\./, '');
     const policy = cookiePolicyFor(domain, s);
-    if (keepCookie({ name: c.name, session: c.session }, policy, userRuleFor(domain, s), domain)) continue;
+    if (keepCookie({ name: c.name, session: c.session, httpOnly: c.httpOnly }, policy, await keepRuleFor(domain, s), domain)) continue;
     await removeCookie(c);
     removed++;
   }

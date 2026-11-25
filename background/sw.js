@@ -6,18 +6,22 @@ import { LISTS } from '../engine/lists.js';
 import {
   VERSION, DEFAULT_SETTINGS, getSettings, saveSettings, deepMerge, getCustomFilters,
   hostOf, rawHostOf, hostChain, isWhitelisted, cookiePolicyFor, isValidHostname, report, diagnostics, serial,
-  effective, netPolicy, IS_SAFARI
+  effective, netPolicy, IS_SAFARI, siteSwitches
 } from './state.js';
 import { netFetch, SB_HOST } from './net.js';
 import { syncStaticRulesets, syncSystemRules, syncCustomRules, syncListDeltas, ruleStats, testUrl } from './rules.js';
-import { rebuildCosmeticIndex, buildCosmeticIndex, frameInit, genericTokens, applyNow, invalidateCustomCosmetic, forgetTab as forgetCosmeticTab, indexInfo, prepareFrame, appliedSelectors } from './cosmetic.js';
+import { rebuildCosmeticIndex, buildCosmeticIndex, refreshPopups, frameInit, genericTokens, applyNow, invalidateCustomCosmetic, forgetTab as forgetCosmeticTab, indexInfo, prepareFrame, appliedSelectors } from './cosmetic.js';
 import { syncRegistrations, onCommitted, getMeta, fallbackActive } from './scripts.js';
-import { ytRetireTo, ytStartMethod, ytResetMethod, YT_METHODS } from './ytadfree.js';
+import { ytStrike, ytStartMethod, ytResetMethod, YT_METHODS } from './ytadfree.js';
 import { updateLists, rebuildOverlay, listStates, forgetList, scheduleUpdates } from './updater.js';
 import { onCookieChanged, sweepSite, cookieSummary } from './cookies.js';
 import * as stats from './stats.js';
 import { MENU, createMenus, refreshMenus } from './menus.js';
 import * as idb from './idb.js';
+import { popupVerdict } from './popups.js';
+import { noteNavigation, forgetTab as forgetSkipTab, skipTarget } from './skip.js';
+import { blockedInfo, proceedOnce, forgetProceed } from './blocked.js';
+import { logMatch, logEvent, logGet, logClear, logForget, logNavigation } from './logger.js';
 
 const DNR = chrome.declarativeNetRequest;
 const EXT_ORIGIN = chrome.runtime.getURL('');
@@ -94,8 +98,44 @@ chrome.alarms.onAlarm.addListener((a) => {
 // ------------------------------------------------------------- navigation
 
 chrome.webNavigation.onBeforeNavigate.addListener((d) => {
-  if (d.frameId === 0) stats.resetTab(d.tabId, d.url);
+  if (d.frameId !== 0) return;
+  stats.resetTab(d.tabId, d.url);
+  logNavigation(d.tabId, d.url);
+  noteNavigation(d);
+  checkPopup(d.tabId, d.url).catch(e => report('popup', e));
 });
+
+// --------------------------------------------------------------- pop-ups
+// A tab or window opened by a page is closed when its first real address
+// matches a $popup filter. Pages often open about:blank first and set the
+// address after, so the opener is remembered until the first navigation.
+
+const popupTabs = new Map(); // tabId -> { opener: Promise<host>, t }
+
+if (chrome.webNavigation.onCreatedNavigationTarget) chrome.webNavigation.onCreatedNavigationTarget.addListener((d) => {
+  const opener = chrome.tabs.get(d.sourceTabId).then(t => rawHostOf(t.url || ''), () => '');
+  popupTabs.set(d.tabId, { opener, openerTab: Promise.resolve(d.sourceTabId), t: Date.now() });
+  if (popupTabs.size > 100) popupTabs.delete(popupTabs.keys().next().value);
+  checkPopup(d.tabId, d.url).catch(e => report('popup', e));
+});
+
+async function checkPopup(tabId, url) {
+  const p = popupTabs.get(tabId);
+  if (!p || !/^https?:/i.test(url || '')) return;
+  popupTabs.delete(tabId);
+  if (Date.now() - p.t > 30000) return;
+  const opener = await p.opener;
+  if (!opener) return;
+  const s = await getSettings();
+  if (!s.enabled) return;
+  // "No pop-ups" on the opener closes every new tab or window it opens.
+  const all = !!siteSwitches(opener, s).noPopups;
+  if (!all && (isWhitelisted(opener.replace(/^www\./, ''), s) || await popupVerdict(url, opener) !== 'block')) return;
+  chrome.tabs.remove(tabId).catch(() => {});
+  stats.countPopup(rawHostOf(url));
+  const src = await p.openerTab;
+  if (src >= 0) logEvent(src, all ? 'pop-up closed (no pop-ups switch)' : 'pop-up closed', url);
+}
 
 chrome.webNavigation.onCommitted.addListener((d) => {
   prepareFrame(d).catch(e => report('commit-css', e));
@@ -104,6 +144,11 @@ chrome.webNavigation.onCommitted.addListener((d) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   offTabs.delete(tabId);
+  popupTabs.delete(tabId);
+  consentClicks.delete(tabId);
+  forgetSkipTab(tabId);
+  forgetProceed(tabId);
+  logForget(tabId);
   stats.forgetTab(tabId);
   forgetCosmeticTab(tabId);
 });
@@ -162,14 +207,14 @@ async function refreshTabUi(tabId, url) {
 
 if (DNR.onRuleMatchedDebug) {
   // Available for unpacked installs: exact per-rule attribution.
-  DNR.onRuleMatchedDebug.addListener((info) => { stats.onRuleMatched(info); });
+  DNR.onRuleMatchedDebug.addListener((info) => { stats.onRuleMatched(info); logMatch(info); });
 } else if (chrome.webRequest && chrome.webRequest.onErrorOccurred) {
   // Packed installs: observe requests the browser refused on our behalf.
   chrome.webRequest.onErrorOccurred.addListener(stats.onBlockedError, { urls: ['<all_urls>'] });
 }
 
 if (chrome.cookies && chrome.cookies.onChanged) {
-  chrome.cookies.onChanged.addListener((info) => { onCookieChanged(info).catch(e => report('cookies', e)); });
+  chrome.cookies.onChanged.addListener((info) => onCookieChanged(info).catch(e => report('cookies', e)));
 }
 
 // ----------------------------------------------------------- context menu
@@ -248,6 +293,7 @@ async function addCustomFilter(filter) {
   await serial(async () => {
     await syncCustomRules();
     invalidateCustomCosmetic();
+    await refreshPopups();
     await rebuildOverlay();
   });
 }
@@ -257,16 +303,32 @@ async function saveCustomFilters(text) {
   return serial(async () => {
     const res = await syncCustomRules();
     invalidateCustomCosmetic();
+    await refreshPopups();
     await rebuildOverlay();
     return res;
   });
 }
 
 // Applies a settings patch and runs only the side effects it needs.
+const SWITCHES = ['noPopups', 'noMedia', 'noFonts', 'noScripts', 'noCosmetic', 'fullCosmetic'];
+function cleanSites(sites) {
+  const out = {};
+  for (const [h, v] of Object.entries(sites || {})) {
+    const host = String(h).trim().toLowerCase().replace(/^www\./, '');
+    if (!isValidHostname(host) || !v || typeof v !== 'object') continue;
+    const sw = {};
+    for (const k of SWITCHES) if (v[k] === true) sw[k] = true;
+    if (Object.keys(sw).length) out[host] = sw;
+  }
+  return out;
+}
+
 async function applySettings(patch) {
   const before = await getSettings();
   const next = deepMerge(before, patch);
   if (patch.cookies && patch.cookies.sites) next.cookies.sites = patch.cookies.sites;
+  if (patch.sites) next.sites = cleanSites(patch.sites);
+  if (patch.strictAllow) next.strictAllow = [...new Set(patch.strictAllow.map(h => String(h).trim().toLowerCase()).filter(isValidHostname))];
   if (patch.whitelist) next.whitelist = [...new Set(patch.whitelist.map(h => String(h).trim().toLowerCase().replace(/^www\./, '')).filter(isValidHostname))];
   await saveSettings(next);
   const changed = (k) => JSON.stringify(before[k]) !== JSON.stringify(next[k]);
@@ -274,9 +336,9 @@ async function applySettings(patch) {
   if (next.youtube && next.youtube.adFree && !(before.youtube && before.youtube.adFree)) await ytResetMethod();
   await serial(async () => {
     if (changed('lists') || changed('customLists') || changed('youtube')) await step('rulesets', syncStaticRulesets);
-    if (changed('whitelist') || changed('cookies') || changed('enabled') || changed('youtube')) await step('system-rules', syncSystemRules);
+    if (changed('whitelist') || changed('cookies') || changed('enabled') || changed('youtube') || changed('privacy') || changed('strictAllow') || changed('sites')) await step('system-rules', syncSystemRules);
     if (changed('lists') || changed('customLists')) { await step('list-deltas', syncListDeltas); await step('overlay', rebuildOverlay); }
-    if (changed('whitelist') || changed('cookies') || changed('youtube') || changed('lists') || changed('enabled')) await step('scripts', syncRegistrations);
+    if (changed('whitelist') || changed('cookies') || changed('youtube') || changed('lists') || changed('enabled') || changed('privacy')) await step('scripts', syncRegistrations);
     if (changed('ui')) await step('badge', applyBadge);
     if (changed('update') || changed('privacy')) await step('alarms', ensureAlarm);
   });
@@ -378,6 +440,8 @@ async function popupState(tabId) {
     strict: effective(s).strict,
     lists: await listsSummary(s),
     detailedStats: !!DNR.onRuleMatchedDebug,
+    switches: (host && s.sites[host]) || {},
+    lighter: s.cosmetic.generic === false,
     version: VERSION
   };
 }
@@ -416,7 +480,8 @@ function validateImport(data) {
 
 // --------------------------------------------------------------- messages
 
-const CONTENT_MESSAGES = new Set(['frame-init', 'tokens', 'yt-stats', 'yt-adfree-method', 'ck-stats', 'sb-segments', 'picker-add', 'picker-open-options']);
+const consentClicks = new Map(); // tabId -> time YouTube's cookie prompt was answered
+const CONTENT_MESSAGES = new Set(['frame-init', 'tokens', 'yt-stats', 'yt-adfree-method', 'yt-consent', 'ck-stats', 'sb-segments', 'picker-add', 'picker-open-options']);
 
 async function handle(msg, sender) {
   // Only this extension's own pages and content scripts may talk to it.
@@ -435,8 +500,18 @@ async function handle(msg, sender) {
       // new pages at the next one (see background/ytadfree.js).
       const url = (sender.tab && sender.tab.url) || sender.url || '';
       if (!/^https:\/\/(www\.)?youtube\.com\//.test(url)) return null;
-      if (await ytRetireTo(msg.m | 0)) await serial(async () => { await syncSystemRules(); await syncRegistrations(); });
+      if (await ytStrike(msg.m | 0)) await serial(async () => { await syncSystemRules(); await syncRegistrations(); });
       return null;
+    }
+    case 'yt-consent': {
+      // YouTube's cookie prompt is answered "Reject all" at most once a
+      // minute per tab, so a page that keeps asking cannot loop.
+      const url = (sender.tab && sender.tab.url) || sender.url || '';
+      if (!/^https:\/\/([a-z0-9-]+\.)?youtube\.com\//.test(url)) return { ok: false };
+      const last = consentClicks.get(tabId) || 0;
+      if (Date.now() - last < 60000) return { ok: false };
+      consentClicks.set(tabId, Date.now());
+      return { ok: true };
     }
     case 'ck-stats': stats.countShimCookies(tabId, msg.n | 0); return null;
     case 'sb-segments': return sponsorSegments(msg.id, msg.categories);
@@ -452,10 +527,42 @@ async function handle(msg, sender) {
 
     // ---- popup
     case 'popup': return popupState(msg.tabId);
+    case 'yt-fix': {
+      // "Fix this video": the page's YouTube script stops changing anything
+      // and loads the video again. Without it (an old page), reload the tab.
+      const id = msg.tabId | 0;
+      let r = null;
+      try { r = await chrome.tabs.sendMessage(id, { t: 'yt-fix' }, { frameId: 0 }); } catch { /* no content script */ }
+      if (!r || !r.ok) await chrome.tabs.reload(id);
+      return { ok: true };
+    }
     case 'set-site-enabled': await setSiteEnabled(msg.host, !!msg.enabled); return { ok: true };
     case 'set-cookie-policy': await setCookiePolicy(msg.host, msg.policy); return { ok: true };
+    case 'skip-target': return skipTarget(tabId, msg.s);
+    case 'blocked-info': return blockedInfo(tabId);
+    case 'log-get': return { ...logGet(msg.tabId | 0, msg.since | 0), available: !!DNR.onRuleMatchedDebug };
+    case 'log-clear': logClear(msg.tabId | 0); return { ok: true };
+    case 'log-rules': return { dynamic: await DNR.getDynamicRules(), session: await DNR.getSessionRules().catch(() => []) };
+    case 'blocked-proceed': {
+      const res = await proceedOnce(tabId, String(msg.url || ''));
+      if (res.ok && msg.always) {
+        const s = await getSettings();
+        const host = res.host.replace(/^www\./, '');
+        if (!s.strictAllow.includes(host)) await applySettings({ strictAllow: [...s.strictAllow, host] });
+      }
+      return { ok: res.ok };
+    }
     case 'set-global': await applySettings({ enabled: !!msg.enabled }); refreshAllTabs(); return { ok: true };
     case 'open-picker': await openPicker(msg.tabId, 0, 'hover'); return { ok: true };
+    case 'open-zapper': await openPicker(msg.tabId, 0, 'zap'); return { ok: true };
+    case 'set-site-switch': {
+      const host = String(msg.host || '').toLowerCase().replace(/^www\./, '');
+      if (!isValidHostname(host) || !SWITCHES.includes(msg.key)) return { ok: false };
+      const s = await getSettings();
+      const sites = { ...s.sites, [host]: { ...(s.sites[host] || {}), [msg.key]: !!msg.on } };
+      await applySettings({ sites });
+      return { ok: true };
+    }
     case 'sweep-site': return { removed: await sweepSite(msg.host) };
     case 'cookie-summary': return cookieSummary(msg.host);
 

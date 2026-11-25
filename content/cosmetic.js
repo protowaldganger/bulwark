@@ -15,6 +15,37 @@
   window.__bw = {};
   if (!/^https?:$/.test(location.protocol)) return;
 
+  // Brave Search opens result links through /go/v1#<token>, a page that
+  // decodes the token in the browser. When that page fails it shows
+  // "500 Internal Error" and only falls back to the server after 15 s.
+  // Go to the server's version (Brave's own fallback) as soon as it fails.
+  if (window === window.top && location.hostname === 'search.brave.com' && location.pathname === '/go/v1') {
+    const token = location.hash.slice(1);
+    if (/^[\w-]{40,}$/.test(token)) {
+      const t0 = Date.now();
+      const check = () => {
+        if (location.pathname !== '/go/v1') return;
+        const text = document.body ? document.body.innerText || document.body.textContent || '' : '';
+        if (/^\s*500\b/.test(text) || /Internal Error/i.test(document.title + ' ' + text.slice(0, 200))) {
+          // Like Brave's page: no "Check this link" step for a link that
+          // came from a search made in this browser.
+          let seen = false;
+          try {
+            const b = Uint8Array.from(atob(token.slice(0, 40).replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+            const nonce = Array.from(b.subarray(1, 9), x => x.toString(16).padStart(2, '0')).join('');
+            const iat = new DataView(b.buffer, 9, 4).getUint32(0);
+            const list = JSON.parse(localStorage.getItem('app.urlCloakSeenNonces') || '[]');
+            seen = b[0] === 1 && Date.now() / 1000 - iat <= 7 * 86400 && Array.isArray(list) && list.includes(nonce);
+          } catch { /* ask */ }
+          location.replace('/go/v1/' + token + '?' + (seen ? '' : 'confirm&') + 'r=1');
+          return;
+        }
+        if (Date.now() - t0 < 15000) setTimeout(check, 200);
+      };
+      setTimeout(check, 200);
+    }
+  }
+
   let procedural = [];
   let generic = false;
   const sentTokens = new Set();
@@ -149,12 +180,16 @@
         return out;
       }
       case 'matches-css': {
-        const i = arg.indexOf(':');
+        // "::before|prop: value" checks a pseudo-element.
+        let pseudo = null, a = arg;
+        const bar = /^(::before|::after)\|/.exec(a);
+        if (bar) { pseudo = bar[1]; a = a.slice(bar[0].length); }
+        const i = a.indexOf(':');
         if (i < 0) return out;
-        const prop = arg.slice(0, i).trim(), val = arg.slice(i + 1).trim();
+        const prop = a.slice(0, i).trim(), val = a.slice(i + 1).trim();
         const re = toRe(val);
         for (const n of nodes) {
-          const v = getComputedStyle(n).getPropertyValue(prop);
+          const v = getComputedStyle(n, pseudo).getPropertyValue(prop);
           if (re ? re.test(v) : v === val) out.push(n);
         }
         return out;
@@ -186,6 +221,11 @@
         return out;
       }
       case 'watch-attr': return nodes;
+      case 'has': {
+        // Keep nodes with a descendant matching a nested procedural filter.
+        for (const n of nodes) if (select(arg, n).length) out.push(n);
+        return out;
+      }
       case 'spath': {
         const sel = arg.trim();
         for (const n of nodes) {
@@ -207,14 +247,34 @@
     }
   }
 
+  // Runs one filter's selector and steps; `root` scopes nested (:has) ones.
+  function select(f, root) {
+    let nodes;
+    try {
+      if (root) nodes = f.s ? [...root.querySelectorAll(':scope ' + f.s)] : [root];
+      else nodes = f.s ? [...document.querySelectorAll(f.s)] : [document.documentElement];
+    } catch { return []; }
+    for (const st of f.t) { if (!nodes.length) break; nodes = step(nodes, st); }
+    return nodes;
+  }
+
+  const nameMatcher = (arg) => {
+    const re = toRe(arg);
+    return re ? (x) => re.test(x) : (x) => x === arg;
+  };
+
   function runProcedural() {
     for (const f of procedural) {
-      let nodes;
-      try {
-        if (f.s) nodes = [...document.querySelectorAll(f.s)];
-        else nodes = [document.documentElement];
-      } catch { continue; }
-      for (const st of f.t) { if (!nodes.length) break; nodes = step(nodes, st); }
+      const nodes = select(f, null);
+      if (Array.isArray(f.a) && (f.a[0] === 'remove-attr' || f.a[0] === 'remove-class')) {
+        // Re-applied on every run: pages put these back.
+        const m = nameMatcher(f.a[1]);
+        for (const n of nodes) {
+          if (f.a[0] === 'remove-attr') { for (const a of [...n.attributes]) if (m(a.name)) n.removeAttribute(a.name); }
+          else for (const c of [...n.classList]) if (m(c)) n.classList.remove(c);
+        }
+        continue;
+      }
       for (const n of nodes) {
         if (procHidden.has(n)) continue;
         if (f.a === 'remove') { n.remove(); procHidden.add(n); continue; }

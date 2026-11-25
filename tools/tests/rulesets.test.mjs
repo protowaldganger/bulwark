@@ -42,7 +42,7 @@ test('manifest references existing files only', () => {
   // redirect targets exist
   for (const rs of rulesets) for (const r of rs.rules) {
     const p = r.action.redirect && r.action.redirect.extensionPath;
-    if (p) assert.ok(fs.existsSync(path.join(ROOT, p)), `${rs.id}#${r.id} -> ${p}`);
+    if (p) assert.ok(fs.existsSync(path.join(ROOT, p.split('?')[0])), `${rs.id}#${r.id} -> ${p}`);
   }
 });
 

@@ -36,7 +36,8 @@ export function safariRuleError(r) {
 export function createChrome(root, { fetchFixtures = {}, safari = false } = {}) {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
   const BASE = 'chrome-extension://bulwarktest/';
-  const log = { insertCSS: [], executeScript: [], removedCookies: [], reloads: [], icons: [], sentToTabs: [] };
+  const log = { insertCSS: [], executeScript: [], removedCookies: [], reloads: [], icons: [], sentToTabs: [], removedTabs: [] };
+  let session = [];
 
   // ---------------------------------------------------------------- storage
   const onChanged = event();
@@ -114,6 +115,13 @@ export function createChrome(root, { fetchFixtures = {}, safari = false } = {}) 
       if (next.filter(r => r.action.type === 'redirect' || r.action.type === 'modifyHeaders').length > 5000) throw new Error('Unsafe rule count exceeded.');
       dynamic = next;
     },
+    async updateSessionRules({ removeRuleIds = [], addRules = [] } = {}) {
+      const rm = new Set(removeRuleIds);
+      const next = session.filter(r => !rm.has(r.id));
+      for (const r of addRules) { const err = validateRule(r); if (err) throw new Error(`Rule with id ${r.id}: ${err}`); next.push(structuredClone(r)); }
+      session = next;
+    },
+    async getSessionRules() { return structuredClone(session); },
     async getDisabledRuleIds({ rulesetId }) { return [...(disabledStatic.get(rulesetId) || [])]; },
     async updateStaticRules({ rulesetId, enableRuleIds = [], disableRuleIds = [] }) {
       if (!staticSets.has(rulesetId)) throw new Error('bad ruleset');
@@ -133,6 +141,7 @@ export function createChrome(root, { fetchFixtures = {}, safari = false } = {}) 
     _evaluate(req) {
       const sets = [...enabled].map(id => ({ id, rules: staticSets.get(id).filter(r => !(disabledStatic.get(id) || new Set()).has(r.id)) }));
       sets.push({ id: '_dynamic', rules: dynamic });
+      sets.push({ id: '_session', rules: session });
       return evaluate(sets, req);
     }
   };
@@ -185,11 +194,12 @@ export function createChrome(root, { fetchFixtures = {}, safari = false } = {}) 
       async get(id) { if (!tabs.has(id)) throw new Error('No tab'); return { ...tabs.get(id) }; },
       async query() { return [...tabs.values()].map(t => ({ ...t })); },
       async reload(id) { log.reloads.push(id); },
+      async remove(id) { log.removedTabs.push(id); tabs.delete(id); },
       async create(o) { return o; },
       async sendMessage(id, msg) { log.sentToTabs.push(msg); const fn = tabListeners.get(id); return fn ? fn(msg) : undefined; },
       onRemoved: event(), onActivated: event(), onUpdated: event()
     },
-    webNavigation: { onBeforeNavigate: event(), onCommitted: event() },
+    webNavigation: { onBeforeNavigate: event(), onCommitted: event(), onCreatedNavigationTarget: event() },
     webRequest: { onErrorOccurred: event() },
     cookies: {
       onChanged: event(),
@@ -244,5 +254,5 @@ export function createChrome(root, { fetchFixtures = {}, safari = false } = {}) 
     // Safari before 18 rejects the origin option.
     scripting.insertCSS = async (o) => { if ('origin' in o) throw new Error('Invalid call to scripting.insertCSS(). Unknown property: origin'); return insert(o); };
   }
-  return { chrome, log, tabs, tabListeners, registered, fetchImpl, dynamicRules: () => dynamic, disabledStatic, enabled, BASE };
+  return { chrome, log, tabs, tabListeners, registered, fetchImpl, dynamicRules: () => dynamic, sessionRules: () => session, disabledStatic, enabled, BASE };
 }

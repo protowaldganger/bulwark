@@ -36,4 +36,23 @@ body.paused .stat b { color: var(--ink-3); }
 .inactive { padding: 18px 16px 8px; }
 .inactive p { margin: 0 0 8px; }
 
-.bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px 16px 16px; }
+.bottom { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; padding: 12px 16px 16px; }
+.bottom .btn { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.switches { padding: 12px 16px 2px; }
+.ytfix { padding: 14px 16px 0; }
+.tools.one { grid-template-columns: 1fr; }
+.tools.one button { justify-content: center; }
+.tools { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.tools button {
+  display: flex; align-items: center; gap: 6px; padding: 7px 8px; min-width: 0;
+  border: 0; border-radius: 999px; background: var(--pill); color: var(--ink-2); cursor: pointer;
+  font-size: 12px; line-height: 1.2; transition: background .2s var(--glide), color .2s var(--glide);
+}
+.tools button:hover { background: var(--hover); color: var(--ink-2); }
+.tools button[aria-pressed="true"] { background: var(--ink); color: var(--on-ink); }
+.tools button[hidden] { display: none; }
+.tools svg { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.tools span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+[hidden] { display: none !important; }

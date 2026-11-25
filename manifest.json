@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Bulwark Ad Blocker",
   "short_name": "Bulwark",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "Private, fast ad and tracker blocking with first-class YouTube ad removal and per-site cookie control. Sends nothing about you anywhere.",
   "minimum_chrome_version": "121",
   "icons": {
@@ -103,6 +103,51 @@
         "id": "brave-specific",
         "enabled": true,
         "path": "rulesets/brave-specific.json"
+      },
+      {
+        "id": "ubo-badware",
+        "enabled": true,
+        "path": "rulesets/ubo-badware.json"
+      },
+      {
+        "id": "urlhaus",
+        "enabled": true,
+        "path": "rulesets/urlhaus.json"
+      },
+      {
+        "id": "ubo-resource-abuse",
+        "enabled": true,
+        "path": "rulesets/ubo-resource-abuse.json"
+      },
+      {
+        "id": "peter-lowe",
+        "enabled": true,
+        "path": "rulesets/peter-lowe.json"
+      },
+      {
+        "id": "cookie-notices",
+        "enabled": false,
+        "path": "rulesets/cookie-notices.json"
+      },
+      {
+        "id": "ubo-annoyances",
+        "enabled": false,
+        "path": "rulesets/ubo-annoyances.json"
+      },
+      {
+        "id": "fanboy-social",
+        "enabled": false,
+        "path": "rulesets/fanboy-social.json"
+      },
+      {
+        "id": "adguard-url-tracking",
+        "enabled": false,
+        "path": "rulesets/adguard-url-tracking.json"
+      },
+      {
+        "id": "frellwit-swedish",
+        "enabled": false,
+        "path": "rulesets/frellwit-swedish.json"
       }
     ]
   },
@@ -115,6 +160,24 @@
         "<all_urls>"
       ],
       "use_dynamic_url": true
+    },
+    {
+      "resources": [
+        "skip/skip.html",
+        "skip/skip.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    },
+    {
+      "resources": [
+        "blocked/blocked.html",
+        "blocked/blocked.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
   "content_security_policy": {

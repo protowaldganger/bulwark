@@ -76,7 +76,7 @@ before(async () => {
 });
 
 test('installs cleanly: rulesets, Safari-valid dynamic rules, scripts', async () => {
-  const want = chrome.runtime.getManifest().declarative_net_request.rule_resources.map(r => r.id);
+  const want = chrome.runtime.getManifest().declarative_net_request.rule_resources.filter(r => r.enabled).map(r => r.id);
   assert.deepEqual((await chrome.declarativeNetRequest.getEnabledRulesets()).sort(), want.sort());
   const dyn = env.dynamicRules();
   assert.ok(dyn.some(r => r.id === 11), 'third-party cookie rule present');

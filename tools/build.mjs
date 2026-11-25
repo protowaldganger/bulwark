@@ -85,7 +85,7 @@ async function compileAll() {
   const raw = {};
   for (const l of bundled) {
     const t0 = performance.now();
-    raw[l.id] = { c: compileList(texts[l.id], { badfilters: globalBad }), ms: performance.now() - t0 };
+    raw[l.id] = { c: compileList(texts[l.id], { badfilters: globalBad, trusted: !!l.trusted, strict: !!l.strict, hostsOnly: !!l.hostsOnly }), ms: performance.now() - t0 };
   }
   // Regular expressions Chrome would skip (over its 2 KB compiled limit).
   const regexOk = await regexSupport(Object.values(raw).flatMap(x => x.c.rules), log);
@@ -203,7 +203,7 @@ async function buildDist({ scriptletTables, shims }, { safari = false } = {}) {
   await esbuild.build({ ...MIN, entryPoints: [p('background/sw.js')], bundle: true, format: 'iife', outfile: d('background.js') });
 
   // Pages: bundle JS, merge theme + page CSS, minify HTML.
-  for (const page of ['popup', 'options']) {
+  for (const page of ['popup', 'options', 'logger']) {
     await esbuild.build({ ...MIN, entryPoints: [p(page, page + '.js')], bundle: true, format: 'iife', outfile: d(page, page + '.js') });
     const css = (await fs.readFile(p('ui/theme.css'), 'utf8')) + '\n' + (await fs.readFile(p(page, page + '.css'), 'utf8'));
     await fs.writeFile(d(page, page + '.css'), (await esbuild.transform(css, { ...MIN, loader: 'css' })).code);
@@ -213,7 +213,7 @@ async function buildDist({ scriptletTables, shims }, { safari = false } = {}) {
   }
 
   // Content scripts and styles.
-  for (const f of ['cosmetic.js', 'picker.js', 'youtube-iso.js', 'youtube-main.js', 'youtube-flag-0.js', 'youtube-flag-1.js', 'youtube-flag-2.js', 'youtube-flag-3.js', 'youtube-flag-4.js', 'youtube-flag-5.js']) {
+  for (const f of ['cosmetic.js', 'picker.js', 'youtube-iso.js', 'youtube-main.js', 'youtube-flag-0.js', 'youtube-flag-1.js', 'youtube-flag-2.js', 'youtube-brave.js', 'gpc.js']) {
     await fs.mkdir(d('content'), { recursive: true });
     await fs.writeFile(d('content', f), await minifyJs(await fs.readFile(p('content', f), 'utf8')));
   }
@@ -241,6 +241,20 @@ async function buildDist({ scriptletTables, shims }, { safari = false } = {}) {
     await fs.writeFile(d('rulesets', f), JSON.stringify(out));
   }
   if (safari) log(`safari: ${dropped} rules Safari cannot express were left out`);
+
+  // Warning page for blocked pages.
+  await fs.mkdir(d('blocked'), { recursive: true });
+  await fs.writeFile(d('blocked/blocked.js'), await minifyJs(await fs.readFile(p('blocked/blocked.js'), 'utf8')));
+  {
+    const theme = (await esbuild.transform(await fs.readFile(p('ui/theme.css'), 'utf8'), { ...MIN, loader: 'css' })).code;
+    const html = (await fs.readFile(p('blocked/blocked.html'), 'utf8')).replace('<link rel="stylesheet" href="../ui/theme.css">', () => '<style>' + theme + '</style>');
+    await fs.writeFile(d('blocked/blocked.html'), minifyHtml(html));
+  }
+
+  // Tracking-link skip page.
+  await fs.mkdir(d('skip'), { recursive: true });
+  await fs.writeFile(d('skip/skip.js'), await minifyJs(await fs.readFile(p('skip/skip.js'), 'utf8')));
+  await fs.writeFile(d('skip/skip.html'), minifyHtml(await fs.readFile(p('skip/skip.html'), 'utf8')));
 
   // Redirect surrogates.
   await fs.mkdir(d('resources'), { recursive: true });

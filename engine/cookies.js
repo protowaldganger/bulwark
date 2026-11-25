@@ -5,8 +5,15 @@
 //   - its name is not a known tracker, AND
 //   - it matches a strictly-necessary pattern (session, auth, CSRF,
 //     consent record, cart, load balancer, bot protection, language), OR
-//     it is a session cookie (no expiry), OR a user rule allows it.
+//     it is a session cookie (no expiry), OR the site's server set it as
+//     HttpOnly, OR a user rule allows it.
 // Everything else is non-essential and is removed.
+//
+// HttpOnly: page scripts cannot read these cookies, which is why sites put
+// sign-in and "keep me signed in" tokens there, under names of their own.
+// Analytics and ad cookies are written by scripts and so are not HttpOnly.
+// Without this, sign-ins held in a long-lived cookie with an unknown name
+// were removed and the site signed you out each time the browser closed.
 
 export const TRACKER_COOKIE_SOURCE = String.raw`^(?:_ga(?:_.*)?|_gid|_gat.*|__utm[a-z]|_gcl_.*|_gac_.*|_fbp|_fbc|fr|_hj.*|_clck|_clsk|_uet[sv]id|muid|_pin_unauth|_pinterest_.*|_tt_.*|_ttp|tt_webid.*|ajs_.*|amplitude_.*|amp_.*|mp_.*_mixpanel|mixpanel.*|_parsely.*|__qca|_scid.*|_sctr|ide|dsid|test_cookie|__gads|__gpi|__eoi|_rdt_uuid|li_sugr|li_fat_id|bcookie|lidc|anj|uuid2|_dc_gtm_.*|_vwo.*|_vis_opt.*|optimizely.*|_mkto_trk|hubspotutk|__hs.*|_lr_.*|_cs_.*|_tq_id.*|_pk_.*|_ym.*|yandexuid|visitor_info1_live|_an_uid|panoramaid.*|_sp_id.*|_sp_ses.*|s_cc|s_sq|s_vi|s_fid|s_ecid|amcv_.*|amcvs_.*|at_check|mbox|__adroll.*|__ar_v4|_au_.*|_lc2_fpi.*|_pubcid.*|cto_.*|__kla_id|_ketch.*|_chartbeat.*|_cb|_cb_svref|_ttgclid|_scclid|_rdt_cid|_twclid|twclid|_gat_.*|wt3_.*|_hp2_.*|ab\.storage\..*|_dd_s|intercom-id-.*|_delighted.*|_omappvp|_omappvs|_tfpvi|cookieyes-analytics|_mcid|_ce\..*|_conv_.*|__ss_tk|__ss|__ssid|_dpm_.*|demdex|dextp|_fw_crm_v|_zitok|_gd.*)$`;
 
@@ -31,7 +38,10 @@ export const SITE_NECESSARY = {
   'spotify.com': ['sp_dc', 'sp_key', 'sp_t'],
   'reddit.com': ['loid', 'edgebucket', 'csv'],
   'atlassian.net': ['tenant.session.token'],
-  'zoom.us': ['_zm_ssid', '_zm_cluster', '_zm_page_auth']
+  'zoom.us': ['_zm_ssid', '_zm_cluster', '_zm_page_auth'],
+  // PREF holds your YouTube settings (language, theme, autoplay). SOCS and
+  // CONSENT, your cookie answer, are kept by the general consent pattern.
+  'youtube.com': ['pref']
 };
 
 function siteAllows(domain, name) {
@@ -50,7 +60,7 @@ export function isTrackerCookie(name) {
 }
 
 /**
- * @param {{name:string, session?:boolean}} cookie
+ * @param {{name:string, session?:boolean, httpOnly?:boolean}} cookie
  * @param {'block'|'necessary'|'allow'} policy
  * @param {(name:string)=>boolean} [userAllow] per-site user rule
  * @param {string} [domain] cookie domain, for site-specific sign-in cookies
@@ -63,6 +73,7 @@ export function keepCookie(cookie, policy, userAllow, domain) {
   if (siteAllows(domain, cookie.name)) return true;
   if (isTrackerCookie(cookie.name)) return false;
   if (NECESSARY_COOKIE_RE.test(cookie.name)) return true;
+  if (cookie.httpOnly === true) return true;
   return cookie.session === true;
 }
 

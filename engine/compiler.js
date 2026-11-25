@@ -37,7 +37,7 @@ const TYPE_MAP = {
 // Options we cannot express in DNR. A filter that uses one is skipped
 // entirely, which is safer than applying it with different semantics.
 const UNSUPPORTED_OPTIONS = new Set([
-  'csp', 'header', 'permissions', 'replace', 'urlskip', 'uritransform', 'urltransform',
+  'header', 'replace', 'uritransform', 'urltransform',
   'removeheader', 'cname', 'ipaddress', 'rewrite', 'sitekey', 'genericblock', 'stealth',
   'content', 'jsonprune', 'network', 'app', 'extension', 'tag', 'webrtc', 'inline-script',
   'inline-font', 'popunder', 'empty', 'mp4', 'cookie', 'hls', 'xmlprune', 'responseheader'
@@ -92,8 +92,39 @@ export const SCRIPTLET_ALIASES = {
   'nano-setInterval-booster': 'nano-setInterval-booster', 'nano-sib': 'nano-setInterval-booster',
   'nano-setTimeout-booster': 'nano-setTimeout-booster', 'nano-stb': 'nano-setTimeout-booster',
   'set-local-storage-item': 'set-local-storage-item',
-  'remove-cookie': 'remove-cookie', 'cookie-remover': 'remove-cookie'
+  'remove-cookie': 'remove-cookie', 'cookie-remover': 'remove-cookie',
+  'set-session-storage-item': 'set-session-storage-item',
+  'trusted-set-local-storage-item': 'trusted-set-local-storage-item',
+  'trusted-set-session-storage-item': 'trusted-set-session-storage-item',
+  'set-cookie': 'set-cookie', 'set-cookie-reload': 'set-cookie-reload',
+  'trusted-set-cookie': 'trusted-set-cookie', 'trusted-set-cookie-reload': 'trusted-set-cookie-reload',
+  'trusted-click-element': 'trusted-click-element',
+  'remove-node-text': 'remove-node-text', 'rmnt': 'remove-node-text',
+  'replace-node-text': 'replace-node-text', 'rpnt': 'replace-node-text',
+  'trusted-replace-node-text': 'replace-node-text', 'trusted-rpnt': 'replace-node-text',
+  'abort-on-stack-trace': 'abort-on-stack-trace', 'aost': 'abort-on-stack-trace',
+  'href-sanitizer': 'href-sanitizer', 'urlskip': 'href-sanitizer',
+  'trusted-prevent-dom-bypass': 'trusted-prevent-dom-bypass',
+  'trusted-replace-argument': 'trusted-replace-argument',
+  'nofab': 'nofab', 'fuckadblock.js-3.2.0': 'nofab',
+  'nobab': 'nobab', 'bab-defuser': 'nobab',
+  'popads-dummy': 'popads-dummy', 'popads.net': 'popads.net',
+  'refresh-defuser': 'refresh-defuser', 'alert-buster': 'alert-buster',
+  'set-attr': 'set-attr', 'trusted-set-attr': 'trusted-set-attr',
+  'json-prune-fetch-response': 'json-prune-fetch-response',
+  'json-prune-xhr-response': 'json-prune-xhr-response',
+  'trusted-replace-fetch-response': 'trusted-replace-fetch-response', 'trusted-rpfr': 'trusted-replace-fetch-response',
+  'trusted-replace-xhr-response': 'trusted-replace-xhr-response'
 };
+
+// Scriptlets that can set arbitrary values, click or rewrite text: only
+// from lists whose maintainers are trusted for that (uBlock Origin's and
+// Brave's own) and from the user's own filters, as uBlock Origin does.
+export const TRUSTED_SCRIPTLETS = new Set([
+  'trusted-set-local-storage-item', 'trusted-set-session-storage-item', 'trusted-set-cookie',
+  'trusted-set-cookie-reload', 'trusted-click-element', 'replace-node-text', 'trusted-prevent-dom-bypass',
+  'trusted-replace-argument', 'trusted-set-attr', 'trusted-replace-fetch-response', 'trusted-replace-xhr-response'
+]);
 
 // Hosts owned by the hand-written YouTube engine. List scriptlets are not
 // applied there so two engines never fight over JSON.parse.
@@ -341,6 +372,7 @@ export function parseNetworkFilter(raw, ctx = {}) {
   let methods = [], notMethods = [];
   let cosmeticFlags = 0;
   let popupOnly = false, sawPopup = false;
+  let csp = null, permissions = null, urlskip = null;
 
   for (const o of opts) {
     let name = o, value = null;
@@ -400,6 +432,13 @@ export function parseNetworkFilter(raw, ctx = {}) {
         removeparam = value;
         break;
       }
+      case 'csp': csp = value === null ? '' : value; break;
+      case 'permissions': permissions = value === null ? '' : value.replace(/\\,/g, ',').replace(/\|/g, ', '); break;
+      case 'urlskip': {
+        if (!value || !/^(?:[?&#/+-]\S*)(?:\s+[?&#/+-]\S*)*$/.test(value)) return { skip: 'urlskip-bad' };
+        urlskip = value;
+        break;
+      }
       case 'elemhide': case 'ehide': cosmeticFlags |= 1; break;
       case 'generichide': case 'ghide': cosmeticFlags |= 2; break;
       case 'specifichide': case 'shide': cosmeticFlags |= 4; break;
@@ -417,7 +456,6 @@ export function parseNetworkFilter(raw, ctx = {}) {
 
   if (droppedInclude && domainInclude.length === 0) return { skip: 'entity-only' };
   if (toDropped && toInclude.length === 0) return { skip: 'to-entity-only' };
-  if (popupOnly && types.size === 0) return { skip: 'popup' };
   void sawPopup;
 
   // Cosmetic exception flags: @@||example.com^$generichide
@@ -473,12 +511,19 @@ export function parseNetworkFilter(raw, ctx = {}) {
   if (methods.length) cond.requestMethods = methods;
   else if (notMethods.length) cond.excludedRequestMethods = notMethods;
 
+  // $popup: not a network rule. The service worker closes matching tabs
+  // that a page opens (see background/popups.js).
+  if (popupOnly && types.size === 0) {
+    if (redirect || removeparam !== null || csp !== null || permissions !== null || urlskip !== null) return { skip: 'popup-modifier' };
+    return { popup: { cond, exception, important } };
+  }
+
   // ---- action
   let action, priority;
   const isDocument = types.has('main_frame');
 
   if (exception) {
-    if (redirect || removeparam !== null) return { skip: 'exception-modifier' };
+    if (redirect || removeparam !== null || csp !== null || permissions !== null || urlskip !== null) return { skip: 'exception-modifier' };
     if (isDocument) {
       // @@...$document: disable everything inside matching documents.
       action = { type: 'allowAllRequests' };
@@ -488,6 +533,21 @@ export function parseNetworkFilter(raw, ctx = {}) {
     }
     action = { type: 'allow' };
     priority = important ? PRIORITY.importantAllow : PRIORITY.allow;
+  } else if (urlskip !== null) {
+    // Tracking redirect: the page goes to skip.html, which works out the
+    // destination from the original address and goes there directly, so
+    // the tracker is never contacted (background/skip.js).
+    action = { type: 'redirect', redirect: { extensionPath: '/skip/skip.html?s=' + encodeURIComponent(urlskip) } };
+    priority = important ? PRIORITY.important : PRIORITY.redirect;
+    types.clear(); types.add('main_frame');
+  } else if (csp !== null || permissions !== null) {
+    // $csp / $permissions: add a policy header to matching documents. A
+    // second policy header can only tighten what the page allows.
+    const value = csp !== null ? csp : permissions;
+    if (!value || /[\r\n]/.test(value)) return { skip: 'header-empty' };
+    action = { type: 'modifyHeaders', responseHeaders: [{ header: csp !== null ? 'content-security-policy' : 'permissions-policy', operation: 'append', value }] };
+    priority = important ? PRIORITY.important : PRIORITY.block;
+    if (!types.size) { types.add('main_frame'); types.add('sub_frame'); }
   } else if (removeparam !== null) {
     action = removeparam === ''
       ? { type: 'redirect', redirect: { transform: { query: '' } } }
@@ -528,7 +588,7 @@ export function parseNetworkFilter(raw, ctx = {}) {
 const COSMETIC_SEP = /^(.*?)(#@?(?:\?|\$|%)?#)(.*)$/;
 
 const PROCEDURAL_OPS = [
-  'has-text', '-abp-contains', 'contains', 'upward', 'xpath', 'matches-path',
+  'matches-css-before', 'matches-css-after', 'has-text', '-abp-contains', 'contains', 'upward', 'xpath', 'matches-path',
   'min-text-length', 'matches-css', 'matches-css-before', 'matches-css-after',
   'matches-attr', 'matches-prop', 'watch-attr', 'others', 'if', 'if-not',
   'remove', 'style', 'remove-attr', 'remove-class', 'shadow', 'matches-media', 'nth-ancestor'
@@ -568,16 +628,23 @@ function readBalanced(s, start) {
 
 // Splits a selector into a CSS prefix and procedural steps. Returns null
 // when the selector uses an operator we do not support.
-export function parseProcedural(sel) {
+export function parseProcedural(sel, nested = false) {
   const steps = [];
-  let action = 'hide', style = null;
+  let action = 'hide', style = null, actionArg = null;
   // trailing action operators
-  const tail = /:(remove|style)\((.*)\)$/.exec(sel);
+  const tail = nested ? null : /:(remove|style|remove-attr|remove-class)\((.*)\)$/.exec(sel);
   if (tail) {
     const openIdx = sel.lastIndexOf(':' + tail[1] + '(');
     if (readBalanced(sel, openIdx + tail[1].length + 1) === sel.length - 1) {
-      if (tail[1] === 'remove') { if (tail[2] !== '') return null; action = 'remove'; }
-      else { style = tail[2].trim(); if (!isSafeCss(style) || /url\(|expression|@/i.test(style)) return null; action = 'style'; }
+      const arg = sel.slice(openIdx + tail[1].length + 2, -1);
+      if (tail[1] === 'remove') { if (arg !== '') return null; action = 'remove'; }
+      else if (tail[1] === 'style') { style = arg.trim(); if (!isSafeCss(style) || /url\(|expression|@/i.test(style)) return null; action = 'style'; }
+      else {
+        // :remove-attr(name) / :remove-class(name), name or /regex/
+        actionArg = arg.trim().replace(/^(["'])(.*)\1$/, '$2');
+        if (!actionArg || /[\s"'<>]/.test(actionArg) && !/^\/.+\/[imsu]*$/.test(actionArg)) return null;
+        action = tail[1];
+      }
       sel = sel.slice(0, openIdx);
     }
   }
@@ -593,32 +660,66 @@ export function parseProcedural(sel) {
   while (i < sel.length) {
     PROC_RE.lastIndex = i;
     const m = PROC_RE.exec(sel);
+    // A :has(...) whose argument is itself procedural becomes a step.
+    const hasAt = findProceduralHas(sel, i);
+    if (hasAt !== -1 && (!m || hasAt < m.index)) {
+      buf += sel.slice(i, hasAt);
+      if (parenDepth(buf) !== 0) return null;
+      flushCss();
+      const open = hasAt + 4, close = readBalanced(sel, open);
+      if (close === -1) return null;
+      if (cssPrefix === null && steps.length === 0) return null;
+      const inner = parseProcedural(sel.slice(open + 1, close).trim(), true);
+      if (!inner || !inner.proc && !inner.css) return null;
+      steps.push(['has', inner.proc || { s: inner.css, t: [] }]);
+      i = close + 1;
+      continue;
+    }
     if (!m) { buf += sel.slice(i); break; }
     buf += sel.slice(i, m.index);
     // An operator nested inside a CSS pseudo-class (:not(:has-text(x)))
     // is not supported.
     if (parenDepth(buf) !== 0) return null;
     flushCss();
-    const op = m[1];
+    let op = m[1];
     const open = m.index + m[0].length - 1;
     const close = readBalanced(sel, open);
     if (close === -1) return null;
-    const arg = sel.slice(open + 1, close);
+    let arg = sel.slice(open + 1, close);
+    if (op === 'matches-css-before' || op === 'matches-css-after') { arg = (op === 'matches-css-before' ? '::before|' : '::after|') + arg; op = 'matches-css'; }
     if (!SUPPORTED_PROC.has(op)) return null;
     if (op !== 'xpath' && /:(has-text|upward|xpath|matches-)/.test(arg)) return null;
     if (op === 'matches-path' && (cssPrefix !== null || steps.length)) return null;
-    if (cssPrefix === null && steps.length === 0 && op !== 'matches-path' && op !== 'xpath') return null;
+    if (cssPrefix === null && steps.length === 0 && op !== 'matches-path' && op !== 'xpath' && !nested) return null;
     steps.push([op, arg]);
     i = close + 1;
   }
   flushCss();
-  if (cssPrefix !== null && !isSafeCss(cssPrefix)) return null;
-  for (const s of steps) if (s[0] === 'spath' && !isSafeCss(s[1])) return null;
-  if (!steps.length) {
+  // Nested (inside :has) selectors may start with a combinator: "> div".
+  const prefixOk = (c) => isSafeCss(nested ? c.replace(/^\s*[>+~]\s*/, '') : c);
+  if (cssPrefix !== null && !prefixOk(cssPrefix)) return null;
+  for (const st of steps) if (st[0] === 'spath' && !isSafeCss(st[1])) return null;
+  const act = action === 'style' ? ['style', style] : actionArg !== null ? [action, actionArg] : action;
+  if (!steps.length && actionArg === null) {
     // Plain CSS after operator normalization
     return { css: cssPrefix || '', action, style };
   }
-  return { proc: { s: cssPrefix || '', t: steps, a: action === 'style' ? ['style', style] : action } };
+  return { proc: { s: cssPrefix || '', t: steps, a: act } };
+}
+
+// Index of the first ":has(" at or after `from` whose argument contains a
+// procedural operator, or -1.
+function findProceduralHas(sel, from) {
+  let at = sel.indexOf(':has(', from);
+  while (at !== -1) {
+    const close = readBalanced(sel, at + 4);
+    if (close === -1) return -1;
+    PROC_RE.lastIndex = 0;
+    const arg = sel.slice(at + 5, close);
+    if (new RegExp(PROC_RE.source).test(arg)) return at;
+    at = sel.indexOf(':has(', close);
+  }
+  return -1;
 }
 
 function tokenForGeneric(sel) {
@@ -685,6 +786,18 @@ function pushTo(obj, key, val) {
   (obj[key] || (obj[key] = [])).push(val);
 }
 
+// Popup filter, packed: [urlFilter or /regex/, flags, initiator domains,
+// excluded initiator domains, request domains]. flags: 1 exception,
+// 2 important, 4 match case, 8 first-party only, 16 third-party only.
+function packPopup({ cond, exception, important }) {
+  const u = cond.regexFilter !== undefined ? '/' + cond.regexFilter + '/' : (cond.urlFilter || '');
+  let f = (exception ? 1 : 0) | (important ? 2 : 0) | (cond.isUrlFilterCaseSensitive ? 4 : 0);
+  if (cond.domainType === 'firstParty') f |= 8; else if (cond.domainType === 'thirdParty') f |= 16;
+  const out = [u, f, cond.initiatorDomains || 0, cond.excludedInitiatorDomains || 0, cond.requestDomains || 0];
+  while (out.length > 2 && out[out.length - 1] === 0) out.pop();
+  return out;
+}
+
 /**
  * Compiles filter list text.
  * @param {string} text  raw list text
@@ -702,6 +815,7 @@ export function compileList(text, opts = {}) {
   const badfilters = opts.badfilters ? new Set([...opts.badfilters, ...localBad]) : localBad;
 
   const rules = [];
+  const popups = [];
   const seen = new Set();
   // cosmetic: spec[host] = { h:[hide], x:[except], s:[style rules], p:[procedural], f:flags, j:[scriptlet excepts] }
   const spec = Object.create(null);
@@ -723,13 +837,25 @@ export function compileList(text, opts = {}) {
     if (line.includes('##') || line.includes('#@#')) { skip('cosmetic-malformed'); continue; }
     if (/\$(.*,)?badfilter(,|$)/.test(line)) continue;
     if (badfilters.size && badfilters.has(badfilterKey(line))) { skip('badfiltered'); continue; }
+    // Lists of single bad addresses (URLhaus) are far too large for the
+    // browser's rule budget; only whole bad hosts are kept.
+    if (opts.hostsOnly && /^(?:\|\|)?[^/$^]+\/./.test(line)) { skip('hosts-only'); continue; }
     const r = parseNetworkFilter(line, { onFlags });
     if (r.skip) { skip(r.skip); continue; }
     if (r.flags) { onFlags(r.flags); stats.network++; continue; }
-    const key = ruleKey(r.rule);
-    if (seen.has(key)) { skip('duplicate'); continue; }
-    seen.add(key);
-    rules.push(r.rule);
+    if (r.popup) { popups.push(packPopup(r.popup)); stats.network++; continue; }
+    // Security lists: a listed host is dangerous as a page too, not only
+    // as something a page loads (uBlock Origin's strict blocking).
+    const c0 = r.rule.condition;
+    if (opts.strict && r.rule.action.type === 'block' && !c0.resourceTypes && !c0.excludedResourceTypes) {
+      c0.resourceTypes = ALL_TYPES.filter(t => t !== 'csp_report');
+    }
+    for (const rule of splitDocumentBlock(r.rule)) {
+      const key = ruleKey(rule);
+      if (seen.has(key)) { skip('duplicate'); continue; }
+      seen.add(key);
+      rules.push(rule);
+    }
     stats.network++;
   }
 
@@ -750,7 +876,7 @@ export function compileList(text, opts = {}) {
   return {
     rules: finalRules,
     quiet: finalRules.quiet,
-    cosmetic: { spec, gen, hg: [...new Set(finalHg)] },
+    cosmetic: { spec, gen, hg: [...new Set(finalHg)], pu: [...new Map(popups.map(p => [JSON.stringify(p), p])).values()] },
     scriptlets,
     badfilters: [...localBad],
     stats
@@ -775,6 +901,7 @@ export function compileList(text, opts = {}) {
       }
       const canonical = SCRIPTLET_ALIASES[name];
       if (!canonical) { skip('scriptlet:' + name); return; }
+      if (opts.trusted === false && TRUSTED_SCRIPTLETS.has(canonical)) { skip('scriptlet-untrusted'); return; }
       if (doms.generic) { skip('scriptlet-generic'); return; }
       const entry = [canonical, ...args];
       let added = 0;
@@ -886,6 +1013,7 @@ export function adaptRuleForSafari(rule) {
   }
   if (c.regexFilter && !webkitRegexOk(c.regexFilter)) return null;
   let action = rule.action;
+  if (action.type === 'redirect' && action.redirect.extensionPath === BLOCKED_PAGE) action = { type: 'block' };
   if (action.type === 'modifyHeaders') {
     action = { ...action };
     delete action.responseHeaders;
@@ -895,6 +1023,21 @@ export function adaptRuleForSafari(rule) {
 }
 
 // ------------------------------------------------------- rule packing
+
+// A blocked page (the main frame) goes to Bulwark's warning page instead of
+// the browser's bare error, so the user sees why and can go back or go on
+// (background/blocked.js). Other types stay plain blocks.
+export const BLOCKED_PAGE = '/blocked/blocked.html';
+export function splitDocumentBlock(rule) {
+  const c = rule.condition;
+  if (rule.action.type !== 'block' || !c.resourceTypes || !c.resourceTypes.includes('main_frame')) return [rule];
+  // Priority 2: above parameter-stripping redirects (1), which match every
+  // page and would otherwise compete; exceptions at 2 still win, because at
+  // equal priority an allow beats a redirect.
+  const page = { ...rule, priority: Math.max(rule.priority || 1, PRIORITY.allow), action: { type: 'redirect', redirect: { extensionPath: BLOCKED_PAGE } }, condition: { ...c, resourceTypes: ['main_frame'] } };
+  const rest = c.resourceTypes.filter(t => t !== 'main_frame');
+  return rest.length ? [page, { ...rule, condition: { ...c, resourceTypes: rest } }] : [page];
+}
 
 const PLAIN_HOST_FILTER = /^\|\|([a-z0-9_]([a-z0-9_.-]*[a-z0-9_])?)\^$/;
 const BUCKET_TARGET = 300;
@@ -906,7 +1049,8 @@ const BUCKET_TARGET = 300;
 // list update only replaces the buckets that changed.
 function isQuietRule(r) {
   const t = r.action.type;
-  return t === 'allow' || t === 'allowAllRequests' || (t === 'redirect' && !!r.action.redirect.transform);
+  // Header changes ($csp, $permissions) block nothing, so they are not counted.
+  return t === 'allow' || t === 'allowAllRequests' || t === 'modifyHeaders' || (t === 'redirect' && !!r.action.redirect.transform);
 }
 
 export function finalizeRules(rules, idBase = 1) {
@@ -981,7 +1125,7 @@ export function packCosmetic(c) {
     r: [...byKey.values()].map(([k, v, h]) => [k, v, h.join(',')]),
     p: [...procs.entries()].map(([k, h]) => [JSON.parse(k), h.join(',')]),
     q: [...procEx.entries()].map(([k, h]) => [k, h.join(',')]),
-    f, g: [...new Set(g)], hg: c.hg
+    f, g: [...new Set(g)], hg: c.hg, pu: c.pu || []
   };
 }
 
@@ -994,7 +1138,7 @@ export function unpackCosmetic(p) {
   for (const [key, hosts] of p.q || []) for (const h of hosts.split(',')) pushTo(at(h), 'px', key);
   for (const [h, flags] of Object.entries(p.f || {})) at(h).f = flags;
   for (const sel of p.g || []) { const t = tokenForGeneric(sel); if (t) pushTo(gen, t, sel); }
-  return { spec, gen, hg: p.hg || [] };
+  return { spec, gen, hg: p.hg || [], pu: p.pu || [] };
 }
 
 // Parse a block of user filters. Same as compileList but scriptlets on
@@ -1009,9 +1153,11 @@ export function compileCustom(text, idBase) {
 export function mergeCosmetic(list) {
   const spec = Object.create(null), gen = Object.create(null);
   const hg = new Set();
+  const pu = [];
   for (const packed of list) {
     const c = unpackCosmetic(packed);
     if (!c) continue;
+    if (c.pu) pu.push(...c.pu);
     for (const [h, e] of Object.entries(c.spec || {})) {
       const t = spec[h] || (spec[h] = {});
       for (const k of ['h', 'x', 's', 'p', 'px', 'j']) if (e[k]) (t[k] || (t[k] = [])).push(...e[k]);
@@ -1025,7 +1171,7 @@ export function mergeCosmetic(list) {
     if (e.p) { const seen = new Set(); e.p = e.p.filter(p => { const k = JSON.stringify(p); if (seen.has(k)) return false; seen.add(k); return true; }); }
   }
   for (const k of Object.keys(gen)) gen[k] = [...new Set(gen[k])];
-  return { spec, gen, hg: [...hg] };
+  return { spec, gen, hg: [...hg], pu };
 }
 
 // Host lookup keys for a hostname: the host, each parent domain, and

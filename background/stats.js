@@ -98,7 +98,16 @@ export async function onRuleMatched(info) {
   await load(); rollDay();
   const { request, rule } = info;
   const t = request.tabId >= 0 ? tab(request.tabId) : null;
-  if (rule.rulesetId === '_dynamic' || rule.rulesetId === '_session') {
+  if (rule.rulesetId === '_session') return; // one-off allow rules (skip page, "open anyway")
+  if (rule.rulesetId === '_dynamic') {
+    const sw = rule.ruleId - ID.siteSwitchBase;
+    if (sw >= 0 && sw < 10) {
+      // Per-site switches: blocked fonts, media and scripts count; the
+      // JavaScript header rule blocks nothing by itself.
+      if (sw === 3) return;
+      countBlocked(t, request.url);
+      return;
+    }
     if (rule.ruleId >= ID.cookieTrackers && rule.ruleId < ID.customBase) {
       if (t) t.cookies++;
       day.cookies++;
@@ -109,7 +118,7 @@ export async function onRuleMatched(info) {
     if (dynVersion !== dynamicState.version || !dynQuiet) {
       dynVersion = dynamicState.version;
       const rules = await chrome.declarativeNetRequest.getDynamicRules().catch(() => []);
-      dynQuiet = new Set(rules.filter(r => r.action.type === 'allow' || r.action.type === 'allowAllRequests' || (r.action.type === 'redirect' && r.action.redirect.transform)).map(r => r.id));
+      dynQuiet = new Set(rules.filter(r => r.action.type === 'allow' || r.action.type === 'allowAllRequests' || r.action.type === 'modifyHeaders' || (r.action.type === 'redirect' && r.action.redirect.transform)).map(r => r.id));
     }
     if (dynQuiet.has(rule.ruleId)) return;
   } else {
@@ -142,6 +151,15 @@ export async function resetTab(tabId, url) {
 }
 
 export function forgetTab(tabId) { tabs.delete(tabId); }
+
+// A pop-up closed by a $popup filter counts as one blocked request.
+export async function countPopup(host) {
+  await load(); rollDay();
+  day.blocked++;
+  const h = host && siteOf(host);
+  if (h) topDomains.set(h, (topDomains.get(h) || 0) + 1);
+  schedule();
+}
 
 export async function countCookie(domain, n) {
   await load(); rollDay();

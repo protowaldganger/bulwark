@@ -53,11 +53,22 @@ function render() {
   $('n-yt').textContent = fmt.format(s.yt);
   $('tiles').classList.toggle('four', isYt);
   $('tile-yt').hidden = !isYt;
+  // In Brave, Shields handles YouTube video ads and Bulwark has nothing to undo.
+  const brave = !!navigator.brave || /brave/i.test(JSON.stringify((navigator.userAgentData && navigator.userAgentData.brands) || []));
+  $('ytfix').hidden = !isYt || !s.enabled || !s.siteEnabled || brave;
 
   for (const b of document.querySelectorAll('#cookies button')) {
     b.setAttribute('aria-pressed', String(b.dataset.p === s.cookiePolicy));
   }
   $('cookie-hint').textContent = HINTS[s.cookiePolicy] + (s.cookiePolicy === s.cookieDefault ? ' Default.' : '');
+
+  for (const b of document.querySelectorAll('#switches button')) {
+    if (b.dataset.k === 'fullCosmetic') b.hidden = !s.lighter;
+    b.setAttribute('aria-pressed', String(!!(s.switches || {})[b.dataset.k]));
+    b.disabled = !s.enabled;
+  }
+  $('log').disabled = !s.web;
+  $('zap').disabled = !s.web || !s.enabled;
 }
 
 function renderLists(s) {
@@ -100,6 +111,27 @@ async function init() {
   $('lists').addEventListener('click', (e) => {
     e.preventDefault();
     chrome.tabs.create({ url: chrome.runtime.getURL('options/options.html#lists') });
+    window.close();
+  });
+  $('switches').addEventListener('click', async (e) => {
+    const b = e.target.closest('button');
+    if (!b || b.disabled) return;
+    const on = b.getAttribute('aria-pressed') !== 'true';
+    b.setAttribute('aria-pressed', String(on));
+    await send({ t: 'set-site-switch', host: state.host, key: b.dataset.k, on });
+    await chrome.tabs.reload(tab.id);
+    await refresh();
+  });
+  $('yt-fix').addEventListener('click', async () => {
+    await send({ t: 'yt-fix', tabId: tab.id });
+    window.close();
+  });
+  $('zap').addEventListener('click', async () => {
+    await send({ t: 'open-zapper', tabId: tab.id });
+    window.close();
+  });
+  $('log').addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('logger/logger.html#' + tab.id) });
     window.close();
   });
   $('options').addEventListener('click', () => { chrome.runtime.openOptionsPage(); window.close(); });

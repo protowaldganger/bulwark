@@ -7,10 +7,11 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
-const FILE = path.join(path.dirname(new URL(import.meta.url).pathname), 'regex-support.json');
+const FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'regex-support.json');
 const key = (regex, cs) => (cs ? '1' : '0') + regex;
 
 async function askChromium(items) {

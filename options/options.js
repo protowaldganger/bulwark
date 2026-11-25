@@ -117,6 +117,7 @@ const VIEWS = {
       <div class="section">
         <div class="rows">
           ${row('Strict privacy', 'No automatic list updates, no SponsorBlock lookups, and no per-site history is saved. Recommended.', sw('strict', on))}
+          ${row('Global Privacy Control', 'Tells every site you visit not to sell or share your data. In places such as California and Colorado, sites must honour it.', sw('gpc', s.privacy.gpc !== false))}
         </div>
       </div>
       <div class="section">
@@ -180,6 +181,12 @@ const VIEWS = {
             `<select id="interval" ${strict() ? 'disabled' : ''}>${[6, 12, 24, 48, 72].map(h => `<option value="${h}" ${auto.intervalHours === h ? 'selected' : ''}>Every ${h} hours</option>`).join('')}</select>${sw('auto', auto.auto && !strict(), strict() ? 'disabled' : '')}`)}
         </div>
       </div>
+      <div class="section">
+        <div class="head"><h2>Element hiding</h2></div>
+        <div class="rows">
+          ${row('Lighter mode', 'Skips the generic hiding rules that apply to every site, as uBlock Origin Lite does. Pages do a little less work; a few leftover ad boxes may show. Turn on Full hiding from the Bulwark button for a site that needs it.', sw('lighter', s.cosmetic.generic === false))}
+        </div>
+      </div>
       ${Object.entries(groups).map(([g, ls]) => `<div class="section"><div class="head"><h2>${esc(g)}</h2></div><div class="rows">${ls.map(listRow).join('')}</div></div>`).join('')}
       <div class="section">
         <div class="head"><h2>Your lists</h2></div>
@@ -199,25 +206,28 @@ const VIEWS = {
     const sbLocked = strict();
     return `
       <h1>YouTube</h1>
-      <p class="lede">Four layers, cheapest first. Videos are requested without ads, any ad data that still arrives is removed before the player reads it, ad requests are blocked by the browser, and anything that slips through is skipped the moment it appears.</p>
+      <p class="lede">Four layers, cheapest first. Videos are requested without ads, any ad data that still arrives is removed before the player reads it, ad requests are blocked by the browser, and anything that slips through is sped through the moment it appears.</p>
+      ${/brave/i.test(JSON.stringify((navigator.userAgentData && navigator.userAgentData.brands) || [])) || navigator.brave ? '<p class="lede"><b>In Brave, Brave Shields handles YouTube video ads.</b> Two blockers changing the same player make YouTube stop videos with "Something went wrong", so Bulwark leaves video ads to Shields. The settings below still apply to the page itself (cookie prompt, feed and sidebar ads, ad requests).</p>' : ''}
       <div class="section">
         <div class="head"><h2>Ads</h2></div>
         <div class="rows">
           ${opt('prune', y.prune, 'Remove ads from player data', 'Strips pre-roll, mid-roll and anti-adblock payloads before playback, so no ad is ever scheduled.')}
-          ${row('Ask for ad-free playback', 'Requests the version of each video that YouTube serves without ads, so there is no ad to remove and no spinner before the video starts. If YouTube refuses one way of asking, Bulwark switches to the next by itself and plays the video normally meanwhile.',
+          ${row('Ask for ad-free playback', 'Requests the version of each video that YouTube serves without ads, so there is no ad to remove and no spinner before the video starts. Not used when you are signed in to YouTube, which refuses it. If YouTube refuses a video, it plays normally instead.',
             sw('y-adFree', y.adFree && y.prune, `data-yt="adFree" ${y.prune ? '' : 'disabled'}`),
             y.adFree && y.prune ? (data.env.ytMethod < data.env.ytMethods ? `Method ${data.env.ytMethod + 1} of ${data.env.ytMethods}` : 'No method works right now: ads are removed instead. Bulwark tries again later.') : '')}
           ${opt('blockPings', y.blockPings, 'Block ad requests', 'Native network rules for YouTube ad endpoints and ad trackers.')}
-          ${opt('skipper', y.skipper, 'Fallback skipper', 'If an ad still starts, it is muted, sped up and skipped, then your volume and speed come back.')}
+          ${opt('skipper', y.skipper, 'Fallback skipper', 'If an ad still starts, it is muted and played at 16x, then your volume and speed come back.')}
         </div>
       </div>
       <div class="section">
         <div class="head"><h2>Page</h2></div>
         <div class="rows">
           ${opt('hideMerch', y.hideMerch, 'Hide merch and ticket shelves', '')}
-          ${opt('hidePromos', y.hidePromos, 'Hide YouTube promotions', 'Premium upsells, movie offers and banners.')}
+          ${opt('hidePromos', y.hidePromos, 'Hide YouTube promotions', 'Premium upsells, paid movie suggestions and banners.')}
+          ${opt('hidePlayables', y.hidePlayables, 'Hide Playables', 'The games shelf on the home page and its menu entry.')}
+          ${opt('hideMembersOnly', y.hideMembersOnly, 'Hide members-only videos', 'Videos you can only watch as a paying channel member.')}
           ${opt('hideShorts', y.hideShorts, 'Hide Shorts', 'Shorts shelves and the Shorts tab.')}
-          ${opt('hideEndCards', y.hideEndCards, 'Hide end screen cards', 'Video and channel cards over the last seconds.')}
+          ${opt('hideEndCards', y.hideEndCards, 'Hide end screen and info cards', 'Video and channel cards over the last seconds, and the info card pop-ups during a video.')}
         </div>
       </div>
       <div class="section">
@@ -281,15 +291,30 @@ const VIEWS = {
 
   whitelist() {
     const wl = data.settings.whitelist;
+    const sa = data.settings.strictAllow || [];
+    const NAMES = { noPopups: 'No pop-ups', noMedia: 'No media', noFonts: 'No fonts', noScripts: 'No JavaScript', noCosmetic: 'No hiding', fullCosmetic: 'Full hiding' };
+    const switchRows = Object.entries(data.settings.sites || {}).sort((a, b) => a[0].localeCompare(b[0])).map(([h, v]) => {
+      const on = Object.keys(NAMES).filter(k => v[k]).map(k => NAMES[k]);
+      return on.length ? `<tr><td>${esc(h)}<div class="faint">${esc(on.join(' · '))}</div></td><td class="actions"><button class="btn ghost" data-del-sw="${esc(h)}">Clear</button></td></tr>` : '';
+    }).filter(Boolean);
     return `
-      <h1>Whitelist</h1>
-      <p class="lede">Sites where ad and tracker blocking is off, subdomains included. Cookie protection still applies; set that per site under Cookies.</p>
+      <h1>Sites</h1>
+      <p class="lede">Your exceptions and switches, site by site. Subdomains are included. Cookie protection is set per site under Cookies.</p>
       <div class="section">
+        <div class="head"><h2>Blocking off</h2></div>
         ${wl.length ? `<table class="tbl"><tbody>${wl.map(h => `<tr><td>${esc(h)}</td><td class="actions"><button class="btn ghost" data-del-wl="${esc(h)}">Remove</button></td></tr>`).join('')}</tbody></table>` : '<div class="rows"><div class="empty">No sites yet.</div></div>'}
         <div class="form-row" style="margin-top:14px">
           <input type="text" id="wl-host" placeholder="example.com">
           <button class="btn ink" id="wl-add">Add site</button>
         </div>
+      </div>
+      <div class="section">
+        <div class="head"><h2>Site switches</h2></div>
+        ${switchRows.length ? `<table class="tbl"><tbody>${switchRows.join('')}</tbody></table>` : '<div class="rows"><div class="empty">None. Set them with the Bulwark button on a site: no pop-ups, no media, no fonts, no JavaScript, no hiding.</div></div>'}
+      </div>
+      <div class="section">
+        <div class="head"><h2>Opened despite a warning</h2></div>
+        ${sa.length ? `<table class="tbl"><tbody>${sa.map(h => `<tr><td>${esc(h)}</td><td class="actions"><button class="btn ghost" data-del-sa="${esc(h)}">Warn again</button></td></tr>`).join('')}</tbody></table>` : '<div class="rows"><div class="empty">None. Sites you open with "Don\'t warn me again" on the warning page show up here.</div></div>'}
       </div>`;
   },
 
@@ -335,6 +360,11 @@ example.com##+js(set-constant, adsEnabled, false)">${esc(data.customFilters)}</t
         ${row('EasyList and EasyPrivacy', 'GPLv3 / CC BY-SA 3.0. The primary ad and tracker lists.', '')}
         ${row('uBlock Origin filters', 'GPLv3. Ads, quick fixes, unbreak and privacy rules.', '')}
         ${row('Brave adblock lists', 'MPL 2.0. Brave Shields fixes and extras.', '')}
+        ${row('Peter Lowe\'s Ad and tracking server list', 'Free to use. pgl.yoyo.org', '')}
+        ${row('Malicious URL Blocklist (URLhaus)', 'CC0. malware-filter, with data from abuse.ch.', '')}
+        ${row('Fanboy\'s Social Blocking List', 'GPLv3 / CC BY-SA 3.0. Social buttons and widgets, off by default.', '')}
+        ${row('AdGuard URL Tracking filter', 'GPLv3. Tracking parameters in links, off by default.', '')}
+        ${row('Frellwit\'s Swedish Filter', 'GPLv3. Swedish sites, off by default.', '')}
         ${row('SponsorBlock', 'CC BY-NC-SA 4.0. Community skip segments, off by default.', '')}
       </div></div>
       <p class="note mono">${esc(data.env.ua)}</p>`;
@@ -388,6 +418,9 @@ const bind = {
       await save({ privacy: { strict: e.target.checked } }, e.target.checked ? 'Strict privacy on' : 'Strict privacy off');
       route();
     });
+    on('#gpc', 'change', async (e) => {
+      await save({ privacy: { gpc: e.target.checked } }, e.target.checked ? 'Global Privacy Control on' : 'Global Privacy Control off');
+    });
     on('#erase-stats', 'click', async () => { await send({ t: 'reset-stats' }); await refresh(); toast('Statistics erased'); });
   },
   lists() {
@@ -422,6 +455,7 @@ const bind = {
     on('#force', 'click', () => runUpdate(true));
     on('#auto', 'change', (e) => save({ update: { auto: e.target.checked } }));
     on('#interval', 'change', (e) => save({ update: { intervalHours: +e.target.value } }));
+    on('#lighter', 'change', (e) => save({ cosmetic: { generic: !e.target.checked } }, e.target.checked ? 'Lighter mode on' : 'Lighter mode off'));
   },
   youtube() {
     onAll('[data-yt]', 'change', (e) => save({ youtube: { [e.target.dataset.yt]: e.target.checked } }));
@@ -470,6 +504,13 @@ const bind = {
       await save({ whitelist: [...data.settings.whitelist, h] }, 'Added'); route();
     };
     on('#wl-add', 'click', add);
+    onAll('[data-del-sw]', 'click', async (e) => {
+      const sites = { ...data.settings.sites }; delete sites[e.target.dataset.delSw];
+      await save({ sites }, 'Switches cleared'); route();
+    });
+    onAll('[data-del-sa]', 'click', async (e) => {
+      await save({ strictAllow: (data.settings.strictAllow || []).filter(h => h !== e.target.dataset.delSa) }, 'Will warn again'); route();
+    });
     on('#wl-host', 'keydown', (e) => { if (e.key === 'Enter') add(); });
   },
   filters() {

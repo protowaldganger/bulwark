@@ -10,15 +10,31 @@ export const VERSION = chrome.runtime.getManifest().version;
 export const IS_SAFARI = (typeof __BW_SAFARI__ !== 'undefined' && __BW_SAFARI__ === true) ||
   (typeof navigator !== 'undefined' && /^((?!chrome|chromium|crios|edg|android).)*safari/i.test(navigator.userAgent || ''));
 
+// Brave runs its own YouTube ad handling in Shields (uBlock Origin's
+// quick fixes). Two engines changing the same player fight each other, and
+// on signed-in accounts YouTube answers any rushed ad with "Something went
+// wrong", so in Brave Bulwark leaves YouTube video ads to Shields
+// (tested 24 November 2026). Brave shows "Brave" among the browser brands.
+export function isBrave() {
+  try {
+    if (typeof navigator === 'undefined') return false;
+    if (navigator.brave) return true;
+    const b = navigator.userAgentData && navigator.userAgentData.brands;
+    return Array.isArray(b) && b.some(x => /brave/i.test(x && x.brand));
+  } catch { return false; }
+}
+
 export const DEFAULT_SETTINGS = {
   schema: 2,
   enabled: true,
   // Strict privacy: Bulwark makes no network request unless you click a
   // button for it, SponsorBlock stays off, and no per-site history is kept.
-  privacy: { strict: true },
+  privacy: { strict: true, gpc: true },
   lists: Object.fromEntries(LISTS.map(l => [l.id, l.enabledByDefault])),
   customLists: [],              // [{ id, name, url, enabled }]
   whitelist: [],                // hostnames where blocking is off
+  strictAllow: [],              // hosts opened despite the warning page, "don't warn again"
+  sites: {},                    // host -> per-site switches { noPopups, noMedia, noFonts, noScripts, noCosmetic, fullCosmetic }
   youtube: {
     prune: true,                // MAIN-world ad payload pruning
     adFree: true,               // ask YouTube for the ad-free variant (no start-up wait)
@@ -30,7 +46,9 @@ export const DEFAULT_SETTINGS = {
     hideShorts: false,
     hideMerch: true,
     hidePromos: true,
-    hideEndCards: false
+    hideEndCards: false,
+    hidePlayables: false,
+    hideMembersOnly: false
   },
   cookies: {
     default: 'necessary',       // 'block' | 'necessary' | 'allow'
@@ -148,6 +166,14 @@ export function isWhitelisted(host, settings) {
   if (!list.length) return false;
   for (const h of hostChain(host)) if (list.includes(h)) return true;
   return false;
+}
+
+// Per-site switches for a host and its parent domains.
+export function siteSwitches(host, settings) {
+  const out = {};
+  const sites = settings.sites || {};
+  for (const h of hostChain(String(host || '').replace(/^www\./, ''))) if (sites[h]) Object.assign(out, sites[h]);
+  return out;
 }
 
 export function cookiePolicyFor(host, settings) {

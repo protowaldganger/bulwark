@@ -28,9 +28,23 @@ test('network filter conversion', () => {
   assert.deepEqual(r('$removeparam=utm_source').action.redirect.transform.queryTransform.removeParams, ['utm_source']);
   assert.equal(r('/ad/img/*$image,domain=~x.com|~y.com').condition.urlFilter, '/ad/img/*');
   assert.equal(r('/banner\\d+/$image').condition.regexFilter, 'banner\\d+');
-  for (const bad of ['$script', '/(?!x)y/', '||x.com^$popup', '||x.com^$csp=a', '||a.com^$domain=b.*', '$removeparam', '|a|b|']) {
+  for (const bad of ['$script', '/(?!x)y/', '||a.com^$domain=b.*', '$removeparam', '|a|b|']) {
     assert.ok(parseNetworkFilter(bad).skip, `should skip ${bad}`);
   }
+  // Pop-up filters go to the pop-up blocker, not to request rules.
+  assert.ok(parseNetworkFilter('||x.com^$popup').popup);
+  assert.ok(parseNetworkFilter('||x.com^$popup').popup.cond);
+  // $csp and $permissions append response headers.
+  const csp = r('||x.com^$csp=script-src \'none\'');
+  assert.deepEqual(csp.action.responseHeaders, [{ header: 'content-security-policy', operation: 'append', value: "script-src 'none'" }]);
+  assert.deepEqual(csp.condition.resourceTypes, ['main_frame', 'sub_frame']);
+  const pp = r('||x.com^$permissions=browsing-topics=()|interest-cohort=()');
+  assert.equal(pp.action.responseHeaders[0].value, 'browsing-topics=(), interest-cohort=()');
+  assert.ok(parseNetworkFilter('@@||x.com^$csp').skip);
+  // $urlskip sends the page through the skip page.
+  const us = r('||t.example/r?$urlskip=?url');
+  assert.equal(us.action.redirect.extensionPath, '/skip/skip.html?s=%3Furl');
+  assert.deepEqual(us.condition.resourceTypes, ['main_frame']);
 });
 
 test('cosmetic compilation, exceptions and lookups', () => {
@@ -100,6 +114,13 @@ test('cookie classification', () => {
   assert.equal(keepCookie({ name: 'SAPISID', session: false }, 'necessary'), true);
   assert.equal(keepCookie({ name: 'OptanonConsent', session: false }, 'necessary'), true);
   assert.equal(keepCookie({ name: 'random_pref', session: false }, 'necessary'), false);
+  // Sign-ins kept in long-lived cookies with names of the site's own
+  // ("keep me signed in"): server-set HttpOnly cookies stay.
+  assert.equal(keepCookie({ name: 'my_app_remember', session: false, httpOnly: true }, 'necessary'), true);
+  assert.equal(keepCookie({ name: 'random_pref', session: false, httpOnly: false }, 'necessary'), false);
+  // A known tracker stays out even when HttpOnly (server-side tagging).
+  assert.equal(keepCookie({ name: '_ga', session: false, httpOnly: true }, 'necessary'), false);
+  assert.equal(keepCookie({ name: 'my_app_remember', session: false, httpOnly: true }, 'block'), false);
   assert.equal(keepCookie({ name: 'random_pref', session: true }, 'necessary'), true);
   assert.equal(keepCookie({ name: 'random_pref', session: false }, 'necessary', n => n === 'random_pref'), true);
   assert.equal(keepCookie({ name: 'PHPSESSID', session: true }, 'block'), false);

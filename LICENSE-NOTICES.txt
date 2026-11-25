@@ -6,3 +6,8 @@ Bulwark bundles compiled data from these filter lists:
 EasyList, EasyPrivacy (easylist.to): GPLv3 / CC BY-SA 3.0
 uBlock Origin uAssets (github.com/uBlockOrigin/uAssets): GPLv3
 Brave adblock-lists (github.com/brave/adblock-lists): MPL 2.0
+Fanboy's Social Blocking List (easylist.to): GPLv3 / CC BY-SA 3.0
+Peter Lowe's Ad and tracking server list (pgl.yoyo.org/adservers): free to use, see its policy page
+Malicious URL Blocklist (gitlab.com/malware-filter/urlhaus-filter): CC0, data from URLhaus by abuse.ch
+AdGuard URL Tracking filter (github.com/AdguardTeam/FiltersRegistry): GPLv3
+Frellwit's Swedish Filter (github.com/lassekongo83/Frellwits-filter-lists): GPLv3
